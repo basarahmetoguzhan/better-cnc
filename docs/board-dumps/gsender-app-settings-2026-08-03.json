@@ -1,0 +1,1415 @@
+{
+   "settings": {
+      "workspace": {
+         "units": "mm",
+         "reverseWidgets": false,
+         "spindleFunctions": false,
+         "coolantFunctions": true,
+         "safeRetractHeight": 0,
+         "customDecimalPlaces": 0,
+         "jobsFinished": 0,
+         "jobsCancelled": 0,
+         "timeSpentRunning": 0,
+         "longestTimeRun": 0,
+         "defaultFirmware": "grblHAL",
+         "outlineMode": "Detailed",
+         "revertWorkspace": false,
+         "sendUsageData": false,
+         "jobTimes": [],
+         "toolChange": {
+            "passthrough": false,
+            "skipDialog": false
+         },
+         "toolChangeOption": "Ignore",
+         "toolChangePosition": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+         },
+         "toolChangeHooks": {
+            "preHook": "",
+            "postHook": ""
+         },
+         "container": {
+            "primary": {
+               "show": true,
+               "widgets": [
+                  "location",
+                  "axes",
+                  "secondary"
+               ]
+            },
+            "default": {
+               "widgets": [
+                  "visualizer",
+                  "job_status"
+               ]
+            },
+            "secondary": {
+               "widgets": []
+            }
+         },
+         "machineProfile": {
+            "id": 6,
+            "company": "Sienci Labs",
+            "name": "LongMill MK2",
+            "type": "30x30",
+            "version": "MK2",
+            "mm": {
+               "depth": 200,
+               "height": 200,
+               "width": 200
+            },
+            "in": {
+               "depth": 7.87,
+               "height": 7.87,
+               "width": 7.87
+            },
+            "endstops": false,
+            "spindle": false,
+            "coolant": false,
+            "laser": false,
+            "laserOnOutline": false,
+            "eepromSettings": {
+               "$0": "10",
+               "$1": "100",
+               "$2": "1",
+               "$4": "1",
+               "$5": "0",
+               "$6": "0",
+               "$10": "1",
+               "$11": "0.010",
+               "$12": "0.002",
+               "$13": "0",
+               "$20": "0",
+               "$21": "0",
+               "$22": "0",
+               "$23": "3",
+               "$24": "25.000",
+               "$25": "1500.000",
+               "$26": "250",
+               "$27": "1.000",
+               "$30": "30000",
+               "$31": "10000",
+               "$32": "0",
+               "$100": "200.000",
+               "$101": "200.000",
+               "$102": "200.000",
+               "$110": "4000.000",
+               "$111": "4000.000",
+               "$112": "3000.000",
+               "$120": "750.000",
+               "$121": "750.000",
+               "$122": "500.000",
+               "$3": "1",
+               "$130": "810.000",
+               "$131": "855.000",
+               "$132": "120.000"
+            },
+            "grblHALeepromSettings": {
+               "$0": "5.0",
+               "$1": "254",
+               "$2": "0",
+               "$4": "15",
+               "$5": "15",
+               "$6": "1",
+               "$8": "0",
+               "$9": "1",
+               "$10": "511",
+               "$11": "0.010",
+               "$12": "0.002",
+               "$13": "0",
+               "$14": "14",
+               "$15": "0",
+               "$16": "0",
+               "$17": "0",
+               "$18": "0",
+               "$19": "0",
+               "$20": "0",
+               "$21": "0",
+               "$22": "0",
+               "$23": "11",
+               "$24": "150.0",
+               "$25": "4300.0",
+               "$26": "25",
+               "$27": "1.500",
+               "$28": "0.100",
+               "$29": "0.0",
+               "$30": "24000.000",
+               "$31": "7500.000",
+               "$32": "0",
+               "$33": "1000.0",
+               "$34": "0.0",
+               "$35": "0.0",
+               "$36": "100.0",
+               "$37": "0",
+               "$39": "1",
+               "$40": "0",
+               "$41": "1",
+               "$42": "2",
+               "$43": "1",
+               "$44": "4",
+               "$45": "3",
+               "$46": "0",
+               "$47": "0",
+               "$56": "5.0",
+               "$57": "100.0",
+               "$58": "-5.0",
+               "$59": "500.0",
+               "$60": "1",
+               "$61": "3",
+               "$62": "0",
+               "$63": "3",
+               "$64": "0",
+               "$65": "0",
+               "$70": "11",
+               "$100": "800.000",
+               "$101": "800.000",
+               "$102": "800.000",
+               "$103": "79.01234568",
+               "$110": "4000.000",
+               "$111": "4000.000",
+               "$112": "4000.000",
+               "$113": "8000.000",
+               "$120": "750.000",
+               "$121": "750.000",
+               "$122": "750.000",
+               "$123": "1000.000",
+               "$133": "0.000",
+               "$140": "2800",
+               "$141": "2800",
+               "$142": "2800",
+               "$143": "0",
+               "$150": "32",
+               "$151": "32",
+               "$152": "32",
+               "$153": "16",
+               "$180": "150.0",
+               "$181": "150.0",
+               "$182": "150.0",
+               "$183": "150.0",
+               "$190": "4300.0",
+               "$191": "4300.0",
+               "$192": "4300.0",
+               "$193": "4300.0",
+               "$200": "22.0",
+               "$201": "22.0",
+               "$202": "22.0",
+               "$203": "22.0",
+               "$210": "35",
+               "$211": "35",
+               "$212": "35",
+               "$213": "50",
+               "$220": "22.0",
+               "$221": "22.0",
+               "$222": "22.0",
+               "$223": "22.0",
+               "$300": "grblHAL",
+               "$301": "0",
+               "$302": "192.168.5.1",
+               "$303": "192.168.5.1",
+               "$304": "255.255.255.0",
+               "$305": "23",
+               "$307": "80",
+               "$308": "21",
+               "$338": "7",
+               "$339": "0",
+               "$340": "0.0",
+               "$341": "0",
+               "$342": "30.0",
+               "$343": "25.0",
+               "$344": "200.0",
+               "$345": "200.0",
+               "$346": "1",
+               "$370": "0",
+               "$372": "0",
+               "$374": "3",
+               "$375": "50",
+               "$376": "1",
+               "$384": "0",
+               "$392": "11.0",
+               "$393": "1.0",
+               "$395": "0",
+               "$398": "128",
+               "$450": "1",
+               "$451": "2",
+               "$452": "4",
+               "$453": "G4P0",
+               "$454": "G4P0",
+               "$455": "G4P0",
+               "$456": "0",
+               "$457": "2",
+               "$458": "0",
+               "$459": "2",
+               "$462": "8192",
+               "$463": "8193",
+               "$464": "8451",
+               "$465": "18",
+               "$466": "34",
+               "$467": "1",
+               "$468": "50.0",
+               "$469": "60.0",
+               "$470": "60.0",
+               "$471": "100.0",
+               "$479": "4",
+               "$481": "0",
+               "$484": "1",
+               "$486": "0",
+               "$511": "7",
+               "$512": "5",
+               "$513": "8",
+               "$520": "0",
+               "$521": "0",
+               "$523": "0",
+               "$650": "1",
+               "$651": "1",
+               "$652": "0",
+               "$653": "2",
+               "$654": "8",
+               "$655": "0",
+               "$656": "1",
+               "$657": "22",
+               "$658": "7",
+               "$659": "3",
+               "$660": "0",
+               "$661": "3",
+               "$662": "0",
+               "$663": "41759",
+               "$664": "0",
+               "$665": "1",
+               "$666": "0",
+               "$668": "1",
+               "$730": "255.000",
+               "$731": "0.000",
+               "$733": "1000.0",
+               "$734": "0.0",
+               "$735": "0.0",
+               "$736": "100.0",
+               "$741": "0.000",
+               "$742": "0.000",
+               "$743": "0",
+               "$3": "6",
+               "$130": "810.000",
+               "$131": "855.000",
+               "$132": "120.000"
+            },
+            "limits": {
+               "xmax": 200,
+               "ymax": 200,
+               "zmax": 200
+            }
+         },
+         "probeProfile": {
+            "xyThickness": 10,
+            "zThickness": {
+               "standardBlock": 15,
+               "autoZero": 5,
+               "zProbe": 15,
+               "probe3D": 0
+            },
+            "plateWidth": 50,
+            "plateLength": 50,
+            "functions": {
+               "x": true,
+               "y": true,
+               "z": true
+            },
+            "touchplateType": "Standard Block"
+         },
+         "tools": [
+            {
+               "metricDiameter": 6.35,
+               "imperialDiameter": 0.25,
+               "type": "end mill"
+            },
+            {
+               "metricDiameter": 3.175,
+               "imperialDiameter": 0.125,
+               "type": "end mill"
+            },
+            {
+               "metricDiameter": 9.525,
+               "imperialDiameter": 0.375,
+               "type": "end mill"
+            },
+            {
+               "metricDiameter": 12.7,
+               "imperialDiameter": 0.5,
+               "type": "end mill"
+            },
+            {
+               "metricDiameter": 15.875,
+               "imperialDiameter": 0.625,
+               "type": "end mill"
+            }
+         ],
+         "recentFiles": [
+            {
+               "fileName": "Emin 90derece açılı kesim ucu_1-Emin 90derece açılı kesim ucu.gcode",
+               "filePath": "C:\\Users\\emint\\Downloads\\Emin 90derece açılı kesim ucu_1-Emin 90derece açılı kesim ucu.gcode",
+               "fileSize": 4868,
+               "timeUploaded": 1785708027980
+            }
+         ],
+         "gamepad": {
+            "deadZone": 0.5,
+            "precision": 3,
+            "profiles": [
+               {
+                  "id": [
+                     "Logitech Cordless RumblePad 2 (STANDARD GAMEPAD Vendor: 046d Product: c219)"
+                  ],
+                  "icon": "fas fa-gamepad",
+                  "active": true,
+                  "profileName": "Logitech F710 Gamepad",
+                  "shortcuts": {},
+                  "name": "Logitech F710 Gamepad",
+                  "mapping": "standard",
+                  "buttons": [
+                     {
+                        "label": "A",
+                        "value": 0,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "B",
+                        "value": 1,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "X",
+                        "value": 2,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Y",
+                        "value": 3,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "LB",
+                        "value": 4,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "RB",
+                        "value": 5,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "LT",
+                        "value": 6,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "RT",
+                        "value": 7,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Back",
+                        "value": 8,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Start",
+                        "value": 9,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "L3",
+                        "value": 10,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "R3",
+                        "value": 11,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Up",
+                        "value": 12,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Down",
+                        "value": 13,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Left",
+                        "value": 14,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Right",
+                        "value": 15,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     }
+                  ],
+                  "axes": [
+                     0,
+                     0,
+                     0,
+                     0
+                  ],
+                  "joystickOptions": {
+                     "stick1": {
+                        "horizontal": {
+                           "primaryAction": "x",
+                           "secondaryAction": "x",
+                           "isReversed": false
+                        },
+                        "vertical": {
+                           "primaryAction": "y",
+                           "secondaryAction": "y",
+                           "isReversed": false
+                        },
+                        "mpgMode": {
+                           "primaryAction": null,
+                           "secondaryAction": null,
+                           "isReversed": false
+                        }
+                     },
+                     "stick2": {
+                        "horizontal": {
+                           "primaryAction": "a",
+                           "secondaryAction": "a",
+                           "isReversed": false
+                        },
+                        "vertical": {
+                           "primaryAction": "z",
+                           "secondaryAction": "z",
+                           "isReversed": false
+                        },
+                        "mpgMode": {
+                           "primaryAction": null,
+                           "secondaryAction": null,
+                           "isReversed": false
+                        }
+                     },
+                     "zeroThreshold": 30,
+                     "movementDistanceOverride": 100
+                  },
+                  "lockout": {
+                     "button": null,
+                     "active": false
+                  },
+                  "modifier": {
+                     "button": null
+                  }
+               },
+               {
+                  "id": [
+                     "Xbox 360 Controller (XInput STANDARD GAMEPAD)",
+                     "Xbox 360 Controller (STANDARD GAMEPAD Vendor: 045e Product: 028e)",
+                     "Wireless Gamepad (Vendor: 2563 Product: 0575)"
+                  ],
+                  "icon": "fas fa-gamepad",
+                  "active": true,
+                  "profileName": "Xbox Controller",
+                  "shortcuts": {},
+                  "name": "Xbox Controller",
+                  "mapping": "standard",
+                  "buttons": [
+                     {
+                        "label": "A",
+                        "value": 0,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "B",
+                        "value": 1,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "X",
+                        "value": 2,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Y",
+                        "value": 3,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "LB",
+                        "value": 4,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "RB",
+                        "value": 5,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "LT",
+                        "value": 6,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "RT",
+                        "value": 7,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Back",
+                        "value": 8,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Start",
+                        "value": 9,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "L3",
+                        "value": 10,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "R3",
+                        "value": 11,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Up",
+                        "value": 12,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Down",
+                        "value": 13,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Left",
+                        "value": 14,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Right",
+                        "value": 15,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     },
+                     {
+                        "label": "Home",
+                        "value": 16,
+                        "primaryAction": null,
+                        "secondaryAction": null
+                     }
+                  ],
+                  "axes": [
+                     0,
+                     0,
+                     0,
+                     0
+                  ],
+                  "joystickOptions": {
+                     "stick1": {
+                        "horizontal": {
+                           "primaryAction": "x",
+                           "secondaryAction": "x",
+                           "isReversed": false
+                        },
+                        "vertical": {
+                           "primaryAction": "y",
+                           "secondaryAction": "y",
+                           "isReversed": false
+                        },
+                        "mpgMode": {
+                           "primaryAction": null,
+                           "secondaryAction": null,
+                           "isReversed": false
+                        }
+                     },
+                     "stick2": {
+                        "horizontal": {
+                           "primaryAction": "a",
+                           "secondaryAction": "a",
+                           "isReversed": false
+                        },
+                        "vertical": {
+                           "primaryAction": "z",
+                           "secondaryAction": "z",
+                           "isReversed": false
+                        },
+                        "mpgMode": {
+                           "primaryAction": null,
+                           "secondaryAction": null,
+                           "isReversed": false
+                        }
+                     },
+                     "zeroThreshold": 30,
+                     "movementDistanceOverride": 100
+                  },
+                  "lockout": {
+                     "button": null,
+                     "active": false
+                  },
+                  "modifier": {
+                     "button": null
+                  }
+               }
+            ]
+         },
+         "terminal": {
+            "inputHistory": []
+         },
+         "mode": "DEFAULT",
+         "rotaryAxis": {
+            "firmwareSettings": {
+               "$101": "19.75308642",
+               "$111": "8000.00",
+               "$20": "0",
+               "$21": "0"
+            },
+            "defaultFirmwareSettings": {
+               "$101": "200",
+               "$111": "4000",
+               "$20": "0",
+               "$21": "0"
+            },
+            "forceHardLimits": false,
+            "forceSoftLimits": false
+         },
+         "shouldWarnZero": false,
+         "diagnostics": {
+            "stepperMotor": {
+               "storedValue": null
+            }
+         },
+         "park": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+         },
+         "notifications": [],
+         "toastDuration": 0,
+         "enableDarkMode": false
+      },
+      "widgets": {
+         "axes": {
+            "minimized": false,
+            "axes": [
+               "x",
+               "y",
+               "z"
+            ],
+            "jog": {
+               "xyStep": 5,
+               "zStep": 2,
+               "aStep": 5,
+               "feedrate": 3000,
+               "keypad": false,
+               "rapid": {
+                  "xyStep": 20,
+                  "zStep": 10,
+                  "aStep": 20,
+                  "xaStep": 20,
+                  "feedrate": 5000
+               },
+               "normal": {
+                  "xyStep": 5,
+                  "zStep": 2,
+                  "aStep": 5,
+                  "xaStep": 5,
+                  "feedrate": 3000
+               },
+               "precise": {
+                  "xyStep": 0.5,
+                  "zStep": 0.1,
+                  "aStep": 0.5,
+                  "xaStep": 0.5,
+                  "feedrate": 1000
+               },
+               "step": 12,
+               "distances": [],
+               "threshold": 250
+            },
+            "mdi": {
+               "disabled": false
+            },
+            "shuttle": {
+               "feedrateMin": 500,
+               "feedrateMax": 2000,
+               "hertz": 10,
+               "overshoot": 1
+            }
+         },
+         "connection": {
+            "minimized": false,
+            "controller": {
+               "type": "Grbl"
+            },
+            "port": "COM3",
+            "baudrate": 115200,
+            "connection": {
+               "type": "serial",
+               "serial": {
+                  "rtscts": false
+               }
+            },
+            "autoReconnect": false,
+            "ip": [
+               192,
+               168,
+               5,
+               1
+            ]
+         },
+         "console": {
+            "minimized": false
+         },
+         "job_status": {
+            "minimized": false,
+            "speed": "",
+            "lastFile": "",
+            "lastFileSize": "",
+            "lastFileRunLength": ""
+         },
+         "grbl": {
+            "minimized": false,
+            "panel": {
+               "queueReports": {
+                  "expanded": true
+               },
+               "statusReports": {
+                  "expanded": true
+               },
+               "modalGroups": {
+                  "expanded": true
+               }
+            }
+         },
+         "location": {
+            "minimized": false,
+            "axes": [
+               "x",
+               "y",
+               "z"
+            ],
+            "jog": {
+               "keypad": true,
+               "step": 12,
+               "distances": [],
+               "speeds": {
+                  "xyStep": 5,
+                  "zStep": 0.5,
+                  "feedrate": 5000
+               }
+            },
+            "mdi": {
+               "disabled": false
+            },
+            "shuttle": {
+               "feedrateMin": 500,
+               "feedrateMax": 2000,
+               "hertz": 10,
+               "overshoot": 1
+            }
+         },
+         "macro": {
+            "minimized": false
+         },
+         "probe": {
+            "minimized": false,
+            "probeCommand": "G38.2",
+            "connectivityTest": true,
+            "useTLO": false,
+            "probeDepth": 10,
+            "probeFeedrate": 75,
+            "probeFastFeedrate": 150,
+            "retractionDistance": 2,
+            "zProbeDistance": 30,
+            "touchPlateHeight": 10,
+            "probeType": "Auto",
+            "direction": 0,
+            "probeAxis": "Z",
+            "tipDiameter3D": 2,
+            "xyRetract3D": 10
+         },
+         "rotary": {
+            "stockTurning": {
+               "options": {
+                  "stockLength": 100,
+                  "stepdown": 20,
+                  "bitDiameter": 6.35,
+                  "spindleRPM": 17000,
+                  "feedrate": 3000,
+                  "stepover": 15,
+                  "startHeight": 50,
+                  "finalHeight": 40,
+                  "enableRehoming": false,
+                  "shouldDwell": false
+               }
+            },
+            "tab": {
+               "show": false
+            }
+         },
+         "spindle": {
+            "minimized": false,
+            "mode": "spindle",
+            "speed": 1000,
+            "spindleMax": 30000,
+            "spindleMin": 10000,
+            "delay": 0,
+            "laser": {
+               "laserOnOutline": false,
+               "power": 100,
+               "duration": 1,
+               "xOffset": 0,
+               "yOffset": 0,
+               "minPower": 0,
+               "maxPower": 255
+            }
+         },
+         "surfacing": {
+            "bitDiameter": 22,
+            "stepover": 40,
+            "feedrate": 2500,
+            "length": 100,
+            "width": 100,
+            "skimDepth": 1,
+            "maxDepth": 1,
+            "spindleRPM": 17000,
+            "type": "SPIRAL_MOVEMENT",
+            "startPosition": "START_POSITION_BACK_LEFT",
+            "spindle": "M3",
+            "cutDirectionFlipped": false,
+            "shouldDwell": false,
+            "flood": false,
+            "mist": false
+         },
+         "visualizer": {
+            "minimized": false,
+            "liteMode": false,
+            "liteOption": "Light",
+            "disabled": false,
+            "disabledLite": false,
+            "minimizeRenders": false,
+            "projection": "orthographic",
+            "cameraMode": "pan",
+            "theme": "Dark",
+            "SVGEnabled": false,
+            "jobEndModal": true,
+            "maintenanceTaskNotifications": true,
+            "gcode": {
+               "displayName": true
+            },
+            "objects": {
+               "limits": {
+                  "visible": true
+               },
+               "coordinateSystem": {
+                  "visible": true
+               },
+               "gridLineNumbers": {
+                  "visible": true
+               },
+               "cuttingTool": {
+                  "visible": true,
+                  "visibleLite": false
+               },
+               "cuttingToolAnimation": {
+                  "visible": true,
+                  "visibleLite": false
+               },
+               "cutPath": {
+                  "visible": true,
+                  "visibleLite": true
+               }
+            },
+            "showWarning": false,
+            "showLineWarnings": false,
+            "showSoftLimitWarning": false
+         }
+      },
+      "commandKeys": {
+         "FEEDRATE_OVERRIDE_P": {
+            "cmd": "FEEDRATE_OVERRIDE_P",
+            "keys": "",
+            "isActive": true
+         },
+         "FEEDRATE_OVERRIDE_PP": {
+            "cmd": "FEEDRATE_OVERRIDE_PP",
+            "keys": "",
+            "isActive": true
+         },
+         "FEEDRATE_OVERRIDE_M": {
+            "cmd": "FEEDRATE_OVERRIDE_M",
+            "keys": "",
+            "isActive": true
+         },
+         "FEEDRATE_OVERRIDE_MM": {
+            "cmd": "FEEDRATE_OVERRIDE_MM",
+            "keys": "",
+            "isActive": true
+         },
+         "FEEDRATE_OVERRIDE_RESET": {
+            "cmd": "FEEDRATE_OVERRIDE_RESET",
+            "keys": "",
+            "isActive": true
+         },
+         "SPINDLE_OVERRIDE_P": {
+            "cmd": "SPINDLE_OVERRIDE_P",
+            "keys": "",
+            "isActive": true
+         },
+         "SPINDLE_OVERRIDE_PP": {
+            "cmd": "SPINDLE_OVERRIDE_PP",
+            "keys": "",
+            "isActive": true
+         },
+         "SPINDLE_OVERRIDE_M": {
+            "cmd": "SPINDLE_OVERRIDE_M",
+            "keys": "",
+            "isActive": true
+         },
+         "SPINDLE_OVERRIDE_MM": {
+            "cmd": "SPINDLE_OVERRIDE_MM",
+            "keys": "",
+            "isActive": true
+         },
+         "SPINDLE_OVERRIDE_RESET": {
+            "cmd": "SPINDLE_OVERRIDE_RESET",
+            "keys": "",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_3D": {
+            "cmd": "VISUALIZER_VIEW_3D",
+            "keys": "",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_TOP": {
+            "cmd": "VISUALIZER_VIEW_TOP",
+            "keys": "",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_FRONT": {
+            "cmd": "VISUALIZER_VIEW_FRONT",
+            "keys": "",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_RIGHT": {
+            "cmd": "VISUALIZER_VIEW_RIGHT",
+            "keys": "",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_LEFT": {
+            "cmd": "VISUALIZER_VIEW_LEFT",
+            "keys": "",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_RESET": {
+            "cmd": "VISUALIZER_VIEW_RESET",
+            "keys": "shift+n",
+            "isActive": true
+         },
+         "LIGHTWEIGHT_MODE": {
+            "cmd": "LIGHTWEIGHT_MODE",
+            "keys": "shift+m",
+            "isActive": true
+         },
+         "TOGGLE_SHORTCUTS": {
+            "cmd": "TOGGLE_SHORTCUTS",
+            "keys": "^",
+            "isActive": true
+         },
+         "VISUALIZER_VIEW_CYCLE": {
+            "cmd": "VISUALIZER_VIEW_CYCLE",
+            "keys": "shift+b",
+            "isActive": true
+         },
+         "VISUALIZER_ZOOM_IN": {
+            "cmd": "VISUALIZER_ZOOM_IN",
+            "keys": "shift+p",
+            "isActive": true
+         },
+         "VISUALIZER_ZOOM_OUT": {
+            "cmd": "VISUALIZER_ZOOM_OUT",
+            "keys": "shift+o",
+            "isActive": true
+         },
+         "VISUALIZER_ZOOM_FIT": {
+            "cmd": "VISUALIZER_ZOOM_FIT",
+            "keys": "shift+i",
+            "isActive": true
+         },
+         "DISPLAY_NOTIFICATIONS": {
+            "cmd": "DISPLAY_NOTIFICATIONS",
+            "keys": "",
+            "isActive": true
+         },
+         "DISPLAY_MACHINE_INFO": {
+            "cmd": "DISPLAY_MACHINE_INFO",
+            "keys": "",
+            "isActive": true
+         },
+         "TOGGLE_INFO_HELPER": {
+            "cmd": "TOGGLE_INFO_HELPER",
+            "keys": "",
+            "isActive": true
+         },
+         "ZERO_X_AXIS": {
+            "cmd": "ZERO_X_AXIS",
+            "keys": "shift+w",
+            "isActive": true
+         },
+         "ZERO_Y_AXIS": {
+            "cmd": "ZERO_Y_AXIS",
+            "keys": "shift+e",
+            "isActive": true
+         },
+         "ZERO_Z_AXIS": {
+            "cmd": "ZERO_Z_AXIS",
+            "keys": "shift+r",
+            "isActive": true
+         },
+         "ZERO_A_AXIS": {
+            "cmd": "ZERO_A_AXIS",
+            "keys": "shift+y",
+            "isActive": true
+         },
+         "ZERO_ALL_AXIS": {
+            "cmd": "ZERO_ALL_AXIS",
+            "keys": "shift+q",
+            "isActive": true
+         },
+         "GO_TO_A_AXIS_ZERO": {
+            "cmd": "GO_TO_A_AXIS_ZERO",
+            "keys": "shift+t",
+            "isActive": true
+         },
+         "GO_TO_X_AXIS_ZERO": {
+            "cmd": "GO_TO_X_AXIS_ZERO",
+            "keys": "shift+s",
+            "isActive": true
+         },
+         "GO_TO_Y_AXIS_ZERO": {
+            "cmd": "GO_TO_Y_AXIS_ZERO",
+            "keys": "shift+d",
+            "isActive": true
+         },
+         "GO_TO_Z_AXIS_ZERO": {
+            "cmd": "GO_TO_Z_AXIS_ZERO",
+            "keys": "shift+f",
+            "isActive": true
+         },
+         "GO_TO_XY_AXIS_ZERO": {
+            "cmd": "GO_TO_XY_AXIS_ZERO",
+            "keys": "shift+a",
+            "isActive": true
+         },
+         "HOMING_GO_TO_BACK_LEFT_CORNER": {
+            "cmd": "HOMING_GO_TO_BACK_LEFT_CORNER",
+            "keys": "",
+            "isActive": true
+         },
+         "HOMING_GO_TO_BACK_RIGHT_CORNER": {
+            "cmd": "HOMING_GO_TO_BACK_RIGHT_CORNER",
+            "keys": "",
+            "isActive": true
+         },
+         "HOMING_GO_TO_FRONT_LEFT_CORNER": {
+            "cmd": "HOMING_GO_TO_FRONT_LEFT_CORNER",
+            "keys": "",
+            "isActive": true
+         },
+         "HOMING_GO_TO_FRONT_RIGHT_CORNER": {
+            "cmd": "HOMING_GO_TO_FRONT_RIGHT_CORNER",
+            "keys": "",
+            "isActive": true
+         },
+         "SET_R_JOG_PRESET": {
+            "cmd": "SET_R_JOG_PRESET",
+            "keys": "shift+v",
+            "isActive": true
+         },
+         "SET_N_JOG_PRESET": {
+            "cmd": "SET_N_JOG_PRESET",
+            "keys": "shift+c",
+            "isActive": true
+         },
+         "SET_P_JOG_PRESET": {
+            "cmd": "SET_P_JOG_PRESET",
+            "keys": "shift+x",
+            "isActive": true
+         },
+         "CYCLE_JOG_PRESETS": {
+            "cmd": "CYCLE_JOG_PRESETS",
+            "keys": "shift+z",
+            "isActive": true
+         },
+         "JOG_A_PLUS": {
+            "cmd": "JOG_A_PLUS",
+            "keys": "ctrl+6",
+            "isActive": true
+         },
+         "JOG_A_MINUS": {
+            "cmd": "JOG_A_MINUS",
+            "keys": "ctrl+4",
+            "isActive": true
+         },
+         "SWITCH_WORKSPACE_MODE": {
+            "cmd": "SWITCH_WORKSPACE_MODE",
+            "keys": "ctrl+5",
+            "isActive": true
+         },
+         "JOG_X_P": {
+            "cmd": "JOG_X_P",
+            "keys": "shift+right",
+            "isActive": true
+         },
+         "JOG_X_M": {
+            "cmd": "JOG_X_M",
+            "keys": "shift+left",
+            "isActive": true
+         },
+         "JOG_Y_P": {
+            "cmd": "JOG_Y_P",
+            "keys": "shift+up",
+            "isActive": true
+         },
+         "JOG_Y_M": {
+            "cmd": "JOG_Y_M",
+            "keys": "shift+down",
+            "isActive": true
+         },
+         "JOG_Z_P": {
+            "cmd": "JOG_Z_P",
+            "keys": "shift+pageup",
+            "isActive": true
+         },
+         "JOG_Z_M": {
+            "cmd": "JOG_Z_M",
+            "keys": "shift+pagedown",
+            "isActive": true
+         },
+         "JOG_X_P_Y_M": {
+            "cmd": "JOG_X_P_Y_M",
+            "keys": "",
+            "isActive": true
+         },
+         "JOG_X_M_Y_P": {
+            "cmd": "JOG_X_M_Y_P",
+            "keys": "",
+            "isActive": true
+         },
+         "JOG_X_Y_P": {
+            "cmd": "JOG_X_Y_P",
+            "keys": "",
+            "isActive": true
+         },
+         "JOG_X_Y_M": {
+            "cmd": "JOG_X_Y_M",
+            "keys": "",
+            "isActive": true
+         },
+         "LOAD_FILE": {
+            "cmd": "LOAD_FILE",
+            "keys": "shift+l",
+            "isActive": true
+         },
+         "UNLOAD_FILE": {
+            "cmd": "UNLOAD_FILE",
+            "keys": "shift+k",
+            "isActive": true
+         },
+         "START_JOB": {
+            "cmd": "START_JOB",
+            "keys": "~",
+            "isActive": true
+         },
+         "PAUSE_JOB": {
+            "cmd": "PAUSE_JOB",
+            "keys": "!",
+            "isActive": true
+         },
+         "STOP_JOB": {
+            "cmd": "STOP_JOB",
+            "keys": "@",
+            "isActive": true
+         },
+         "RUN_OUTLINE": {
+            "cmd": "RUN_OUTLINE",
+            "keys": "",
+            "isActive": true
+         },
+         "START_PROBE": {
+            "cmd": "START_PROBE",
+            "keys": "",
+            "isActive": true
+         },
+         "CONFIRM_PROBE": {
+            "cmd": "CONFIRM_PROBE",
+            "keys": "",
+            "isActive": true
+         },
+         "PROBE_DIAMETER_SCROLL_UP": {
+            "cmd": "PROBE_DIAMETER_SCROLL_UP",
+            "keys": "",
+            "isActive": true
+         },
+         "PROBE_DIAMETER_SCROLL_DOWN": {
+            "cmd": "PROBE_DIAMETER_SCROLL_DOWN",
+            "keys": "",
+            "isActive": true
+         },
+         "OPEN_PROBE": {
+            "cmd": "OPEN_PROBE",
+            "keys": "",
+            "isActive": true
+         },
+         "PROBE_ROUTINE_SCROLL_RIGHT": {
+            "cmd": "PROBE_ROUTINE_SCROLL_RIGHT",
+            "keys": "",
+            "isActive": true
+         },
+         "PROBE_ROUTINE_SCROLL_LEFT": {
+            "cmd": "PROBE_ROUTINE_SCROLL_LEFT",
+            "keys": "",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_UNLOCK": {
+            "cmd": "CONTROLLER_COMMAND_UNLOCK",
+            "keys": "$",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_RESET": {
+            "cmd": "CONTROLLER_COMMAND_RESET",
+            "keys": "%",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_HOMING": {
+            "cmd": "CONTROLLER_COMMAND_HOMING",
+            "keys": "ctrl+alt+command+h",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_REALTIME_REPORT": {
+            "cmd": "CONTROLLER_COMMAND_REALTIME_REPORT",
+            "keys": "`",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_ERROR_CLEAR": {
+            "cmd": "CONTROLLER_COMMAND_ERROR_CLEAR",
+            "keys": "*",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_TOOLCHANGE_ACKNOWLEDGEMENT": {
+            "cmd": "CONTROLLER_COMMAND_TOOLCHANGE_ACKNOWLEDGEMENT",
+            "keys": "ctrl+alt+command+a",
+            "isActive": true
+         },
+         "CONTROLLER_COMMAND_VIRTUAL_STOP_TOGGLE": {
+            "cmd": "CONTROLLER_COMMAND_VIRTUAL_STOP_TOGGLE",
+            "keys": "ctrl+8",
+            "isActive": true
+         },
+         "CUT": {
+            "cmd": "CUT",
+            "keys": "ctrl+x",
+            "isActive": true
+         },
+         "COPY": {
+            "cmd": "COPY",
+            "keys": "ctrl+c",
+            "isActive": true
+         },
+         "PASTE": {
+            "cmd": "PASTE",
+            "keys": "ctrl+v",
+            "isActive": true
+         },
+         "UNDO": {
+            "cmd": "UNDO",
+            "keys": "ctrl+z",
+            "isActive": true
+         },
+         "PROBE_ROTARY_Z_AXIS": {
+            "cmd": "PROBE_ROTARY_Z_AXIS",
+            "keys": "",
+            "isActive": true
+         },
+         "PROBE_ROTARY_Y_AXIS": {
+            "cmd": "PROBE_ROTARY_Y_AXIS",
+            "keys": "",
+            "isActive": true
+         },
+         "MIST_COOLANT": {
+            "cmd": "MIST_COOLANT",
+            "keys": "",
+            "isActive": true
+         },
+         "FLOOD_COOLANT": {
+            "cmd": "FLOOD_COOLANT",
+            "keys": "",
+            "isActive": true
+         },
+         "STOP_COOLANT": {
+            "cmd": "STOP_COOLANT",
+            "keys": "",
+            "isActive": true
+         },
+         "TOGGLE_SPINDLE_LASER_MODE": {
+            "cmd": "TOGGLE_SPINDLE_LASER_MODE",
+            "keys": "",
+            "isActive": true
+         },
+         "CW_LASER_ON": {
+            "cmd": "CW_LASER_ON",
+            "keys": "",
+            "isActive": true
+         },
+         "CCW_LASER_TEST": {
+            "cmd": "CCW_LASER_TEST",
+            "keys": "",
+            "isActive": true
+         },
+         "STOP_LASER_OFF": {
+            "cmd": "STOP_LASER_OFF",
+            "keys": "",
+            "isActive": true
+         },
+         "HOMING_PARK": {
+            "cmd": "HOMING_PARK",
+            "keys": "",
+            "isActive": true
+         }
+      }
+   },
+   "events": {}
+}

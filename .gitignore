@@ -1,0 +1,27 @@
+# Read-only upstream clones — never committed, re-clone with scripts/ if needed
+reference/
+
+# Python
+*.pyc
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.so
+*.ko
+
+# LinuxCNC runtime artifacts
+*.var.bak
+*.tbl.bak
+linuxcnc.log
+position*.txt
+
+# Claude Code permission allowlists.
+# Auto-accumulated per machine and full of absolute paths (scratchpad dirs with
+# session UUIDs, /Users/... in additionalDirectories), so they are not portable
+# to the Pi or to anyone else's checkout. Not secrets — just machine-local noise.
+# Other .claude/ content (agents, commands) can be committed deliberately.
+.claude/settings.json
+.claude/settings.local.json
