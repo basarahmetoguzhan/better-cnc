@@ -1,0 +1,337 @@
+# =============================================================================
+# test-rig.hal - Phase 1.5 test machine: 3-axis DIY wooden-frame router
+# =============================================================================
+#
+#   *** UNTESTED DRAFT. NOT READY TO RUN. ***
+#
+# The Zhulong board has NOT been detected yet. Every hm2_ pin name below is
+# built from [HOSTMOT2]BOARD in the INI, which is itself an assumption, and the
+# stepgen instance numbers are assumed to map 1:1 onto the AXIS connectors.
+#
+#   grep -n 'ASSUMPTION:' configs/test-rig/test-rig.hal
+#
+# First run MUST be with the motors mechanically uncoupled. See README.md.
+#
+# Structure follows the upstream sample
+#   reference/linuxcnc/configs/by_interface/mesa/hm2-stepper/hm2-stepper-eth.hal
+# which is the config type this most closely resembles (hm2_eth, 3 stepgens,
+# open loop). Pin and parameter names are cited to source where non-obvious.
+# =============================================================================
+
+
+# =============================================================================
+# LOADS
+# =============================================================================
+
+# Kinematics - trivkins, from [KINS]KINEMATICS
+loadrt [KINS]KINEMATICS
+
+# Motion controller. No base thread is loaded: step pulses are generated in the
+# FPGA, not in software, so there is nothing for a fast thread to do.
+loadrt [EMCMOT]EMCMOT servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS
+
+# -----------------------------------------------------------------------------
+# hostmot2 driver, with module debug output ENABLED.
+#
+# debug_modules=1 is REQUIRED for this config, not optional. It is what makes
+# the driver print its per-module summary, including the line we need:
+#
+#     hm2/hm2_7i96.0:     clock_frequency: NNNNNNNN Hz (NN.NN MHz)
+#
+# That print is gated behind `if (debug_modules)` at hostmot2.c:1672-1675, and
+# the parameter defaults to 0 (hostmot2.c:53-54), so without this flag the line
+# never appears. The clock matters because steplen, stepspace, dirsetup and
+# dirhold are ALL scaled by it (stepgen.c:348, :359, :370, :381) and the driver
+# takes the value on faith from the IDROM - it cannot verify it. Our board
+# carries a 50.000 MHz crystal while a stock 7i96 declares 33 MHz, so this is a
+# live question. See docs/05 section e and docs/09.
+#
+# debug_idrom=1 additionally dumps the IDROM header (gated at
+# hostmot2.c:742-744), which gives ClockLow/ClockHigh independently.
+#
+# Capture both after starting:   dmesg | grep -i 'clock\|idrom'
+# and save the output into docs/board-dumps/.
+# -----------------------------------------------------------------------------
+loadrt hostmot2 debug_modules=1 debug_idrom=1
+
+# Low-level Ethernet driver. board_ip and config come from [HOSTMOT2].
+loadrt [HOSTMOT2](DRIVER) board_ip=[HOSTMOT2](BOARD_IP) config=[HOSTMOT2](CONFIG)
+
+# Estop latch - see the ESTOP section at the bottom.
+loadrt estop_latch
+
+
+# =============================================================================
+# THREADS
+# =============================================================================
+# Read first, compute, write last. estop-latch runs after the write so a fault
+# raised this cycle is latched before the next one.
+#
+# ASSUMPTION: the component name hm2_[HOSTMOT2](BOARD).0 resolves to
+#   hm2_7i96.0. hm2_eth builds this from the board's OWN reported name string
+#   (hm2_eth.c:1487) - we do not get to choose it. If the board reports
+#   anything not beginning "7I96", every line below that says
+#   hm2_[HOSTMOT2](BOARD) is wrong, and the fix is one edit to [HOSTMOT2]BOARD
+#   in the INI. Resolved by: halcmd show pin
+
+addf hm2_[HOSTMOT2](BOARD).0.read      servo-thread
+addf motion-command-handler            servo-thread
+addf motion-controller                 servo-thread
+addf hm2_[HOSTMOT2](BOARD).0.write     servo-thread
+addf estop-latch.0                     servo-thread
+
+
+# =============================================================================
+# STEPGEN CONFIGURATION
+# =============================================================================
+#
+# ASSUMPTION: stepgen.00 / .01 / .02 drive the AXIS 0 / AXIS 1 / AXIS 2
+#   connectors respectively, and therefore X / Y / Z.
+#
+#   This is the single biggest assumption in this file. The Zhulong has SIX
+#   AXIS connectors, and which stepgen instance is wired to which connector is
+#   decided by the vendor's bitfile, not by us. There is no reason beyond
+#   convention to expect AXIS 0 == stepgen.00.
+#
+#   Worse, docs/03 established that on the stock Mesa bitfile the per-channel
+#   order is Dir BEFORE Step, which is not the intuitive order - and our board
+#   runs a different bitfile entirely, so even that is no guide.
+#
+#   Resolved by: mesaflash --readhmid, then read the per-pin listing for lines
+#   of the form
+#       IO Pin NNN (...): StepGen #N, pin Step (Output)
+#   and note which IO number each stepgen instance and signal lands on. Then
+#   confirm physically: command a small move on one stepgen at a time with the
+#   motors uncoupled and see which one turns.
+#
+# step_type = 0 selects Step/Dir output (hostmot2.adoc:528-532).
+#   0 = Step/Dir, 1 = Up/Down, 2 = Quadrature. TB6560 wants Step/Dir.
+#
+# Timing parameters are all in NANOSECONDS (hostmot2.adoc:511-537) and come
+# from [JOINT_n] custom variables. Values are from the TB6560 analysis in
+# docs/09 - dirsetup/dirhold/stepspace have no GRBL equivalent so they could
+# not come from the machine's EEPROM.
+#
+# position-scale takes [JOINT_n]SCALE directly. There is NO dirinvert parameter
+# on a hostmot2 stepgen - to reverse an axis, negate SCALE in the INI.
+# =============================================================================
+
+# ------------------------------- X / joint 0 ---------------------------------
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.step_type        0
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.position-scale   [JOINT_0]SCALE
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.steplen          [JOINT_0]STEPLEN
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.stepspace        [JOINT_0]STEPSPACE
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.dirsetup         [JOINT_0]DIRSETUP
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.dirhold          [JOINT_0]DIRHOLD
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.maxvel           [JOINT_0]STEPGEN_MAX_VEL
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.00.maxaccel         [JOINT_0]STEPGEN_MAX_ACC
+
+# ------------------------------- Y / joint 1 ---------------------------------
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.step_type        0
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.position-scale   [JOINT_1]SCALE
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.steplen          [JOINT_1]STEPLEN
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.stepspace        [JOINT_1]STEPSPACE
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.dirsetup         [JOINT_1]DIRSETUP
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.dirhold          [JOINT_1]DIRHOLD
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.maxvel           [JOINT_1]STEPGEN_MAX_VEL
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.01.maxaccel         [JOINT_1]STEPGEN_MAX_ACC
+
+# ------------------------------- Z / joint 2 ---------------------------------
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.step_type        0
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-scale   [JOINT_2]SCALE
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.steplen          [JOINT_2]STEPLEN
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.stepspace        [JOINT_2]STEPSPACE
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.dirsetup         [JOINT_2]DIRSETUP
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.dirhold          [JOINT_2]DIRHOLD
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.maxvel           [JOINT_2]STEPGEN_MAX_VEL
+setp hm2_[HOSTMOT2](BOARD).0.stepgen.02.maxaccel         [JOINT_2]STEPGEN_MAX_ACC
+
+
+# =============================================================================
+# MOTION <-> STEPGEN WIRING
+# =============================================================================
+#
+# control-type FALSE = position mode: motion sends a position command and the
+# stepgen closes its own internal loop on the FPGA accumulator. This is the
+# normal arrangement for step/dir and is what the upstream sample uses.
+#
+# control-type is a bit IN pin (stepgen.c:931), not a parameter, and defaults
+# to FALSE - so position mode is already the default and the upstream sample
+# does not set it. It is set explicitly below anyway: this is a draft config
+# that will be read by someone trying to understand it, and an implicit default
+# is a thing you have to know rather than a thing you can see.
+#
+# position-fb comes from that same accumulator (stepgen.c:117-120). It counts
+# steps the FPGA emitted - it is NOT an independent measurement of where the
+# axis physically is. See the FERROR discussion in the INI.
+# =============================================================================
+
+# ------------------------------- X / joint 0 ---------------------------------
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.00.control-type   0
+newsig emcmot.00.enable bit
+sets   emcmot.00.enable FALSE
+net emcmot.00.enable <= joint.0.amp-enable-out
+net emcmot.00.enable => hm2_[HOSTMOT2](BOARD).0.stepgen.00.enable
+
+net motor.00.pos-cmd joint.0.motor-pos-cmd => hm2_[HOSTMOT2](BOARD).0.stepgen.00.position-cmd
+net motor.00.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.00.position-fb => joint.0.motor-pos-fb
+
+# ------------------------------- Y / joint 1 ---------------------------------
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.01.control-type   0
+newsig emcmot.01.enable bit
+sets   emcmot.01.enable FALSE
+net emcmot.01.enable <= joint.1.amp-enable-out
+net emcmot.01.enable => hm2_[HOSTMOT2](BOARD).0.stepgen.01.enable
+
+net motor.01.pos-cmd joint.1.motor-pos-cmd => hm2_[HOSTMOT2](BOARD).0.stepgen.01.position-cmd
+net motor.01.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.01.position-fb => joint.1.motor-pos-fb
+
+# ------------------------------- Z / joint 2 ---------------------------------
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.02.control-type   0
+newsig emcmot.02.enable bit
+sets   emcmot.02.enable FALSE
+net emcmot.02.enable <= joint.2.amp-enable-out
+net emcmot.02.enable => hm2_[HOSTMOT2](BOARD).0.stepgen.02.enable
+
+net motor.02.pos-cmd joint.2.motor-pos-cmd => hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-cmd
+net motor.02.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-fb => joint.2.motor-pos-fb
+
+
+# =============================================================================
+# LIMIT AND HOME SWITCHES - DELIBERATELY NOT CONNECTED
+# =============================================================================
+#
+# Everything in this section is commented out ON PURPOSE. Do not uncomment any
+# of it until the two questions below are answered with a multimeter and
+# halmeter. Connecting a switch with the wrong polarity means LinuxCNC believes
+# the axis is permanently on its limit - or, far worse, believes it never is.
+#
+# QUESTION 1 - POLARITY. Are these switches normally-open or normally-closed,
+#   and does the opto-isolated input invert?
+#   The inputs are opto-isolated (docs/04, 24 V design inferred from the
+#   4.7k/510R resistor pair). An optocoupler input stage commonly inverts, so
+#   .in may read TRUE when the switch is OPEN. Every pin has both .in and
+#   .in_not (ioport.c:250, :263) - LinuxCNC inverts an input by choosing the
+#   negated pin, not by setting a parameter. Pick whichever reads FALSE when
+#   the axis is clear of the switch.
+#
+#   How to answer: with the machine powered but NOT enabled, run
+#       halcmd -kf
+#       halcmd: loadrt ...   (or just run this config and open halmeter)
+#   watch each gpio pin while pushing each switch by hand. Record which pin
+#   moves, and in which direction.
+#
+# QUESTION 2 - SENSOR-TO-END MAPPING. Which physical end of which axis is each
+#   sensor at? docs/08 confirms the IO NUMBERS (20-24 are the five isolated
+#   inputs, and the silkscreen numbers really are global IO numbers). It does
+#   NOT establish which end of which axis each one sits at. That is still
+#   unverified.
+#
+# ASSUMPTION: the planned mapping below. From docs, sensor-to-end assignment
+#   NOT yet verified.
+#
+#     gpio.020  ->  joint.0 (X) home + one limit end
+#     gpio.021  ->  joint.0 (X) other limit end
+#     gpio.022  ->  joint.1 (Y) home + one limit end
+#     gpio.023  ->  joint.1 (Y) other limit end
+#     gpio.024  ->  joint.2 (Z) home + limit  (Z has ONE sensor, at the top)
+#
+#   Resolved by: halmeter, per Question 1 above.
+#
+# Note that home and limit SHARE a switch on X, Y and Z. That is why
+# HOME_IGNORE_LIMITS = YES is set on all three joints in the INI - see the
+# citation of ini-homing.adoc:168-176 there. The same switch signal gets netted
+# to both the home input and a limit input.
+#
+# Motion's switch input pins, verified from source:
+#     joint.N.home-sw-in      homing.c:245
+#     joint.N.pos-lim-sw-in   motion.c:760
+#     joint.N.neg-lim-sw-in   motion.c:761
+#
+# Sharing one physical switch between several pins is a documented, supported
+# pattern - see the worked example at
+# reference/linuxcnc/docs/src/config/stepper.adoc:123-131.
+#
+# -----------------------------------------------------------------------------
+# X - joint 0. Assumes gpio.020 at the minimum (home) end, gpio.021 at maximum.
+# Swap .in for .in_not if the polarity check says so.
+# -----------------------------------------------------------------------------
+# net x-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.020.in
+# net x-home-limit  => joint.0.home-sw-in
+# net x-home-limit  => joint.0.neg-lim-sw-in
+# net x-max-limit   hm2_[HOSTMOT2](BOARD).0.gpio.021.in
+# net x-max-limit   => joint.0.pos-lim-sw-in
+
+# -----------------------------------------------------------------------------
+# Y - joint 1. Assumes gpio.022 at the minimum (home) end, gpio.023 at maximum.
+# -----------------------------------------------------------------------------
+# net y-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.022.in
+# net y-home-limit  => joint.1.home-sw-in
+# net y-home-limit  => joint.1.neg-lim-sw-in
+# net y-max-limit   hm2_[HOSTMOT2](BOARD).0.gpio.023.in
+# net y-max-limit   => joint.1.pos-lim-sw-in
+
+# -----------------------------------------------------------------------------
+# Z - joint 2. ONE sensor only, at the TOP. Z homes UP toward it, so the top is
+# the positive limit and the home switch, and there is NO bottom limit switch
+# at all - the only thing protecting the bottom of Z travel is the soft limit
+# in [JOINT_2]MIN_LIMIT. Measure that travel before trusting it.
+# -----------------------------------------------------------------------------
+# net z-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.024.in
+# net z-home-limit  => joint.2.home-sw-in
+# net z-home-limit  => joint.2.pos-lim-sw-in
+
+
+# =============================================================================
+# ESTOP CHAIN - GUI ONLY. THERE IS NO HARDWARE ESTOP INPUT.
+# =============================================================================
+#
+#   *** SAFETY: this machine has NO physical emergency stop wired to the
+#       controller. The only software estop is the GUI button. ***
+#
+# Why: the board brings out exactly five isolated digital inputs (docs/04,
+# docs/08), and all five are consumed by the limit/home switches - two for X,
+# two for Y, one for Z. There is no sixth input left for an estop button.
+#
+# What this means in practice:
+#   - The GUI estop stops MOTION. It does not remove power from anything.
+#   - If the machine misbehaves, the reliable stop is to cut power at the
+#     supply or a mains switch. Have that within reach before the first run.
+#   - This is acceptable for a small wooden-frame test router with a hand on
+#     the plug. It is NOT acceptable for the marble machine, which will need a
+#     hardware estop chain that drops drive power independently of the
+#     controller.
+#
+# Options if a hardware estop is wanted on this machine later: free an input by
+# giving up a limit switch (X and Y each have two; one per axis would do for
+# homing), or wire the estop into the drive enable chain so it works without a
+# controller input at all - which is the better engineering answer anyway.
+#
+# The chain below is the upstream sample's arrangement
+# (hm2-stepper-eth.hal:194-197):
+#
+#   iocontrol.0.user-request-enable  the GUI estop-reset request
+#                                    (ioControl.cc:319-321)
+#   estop-latch.0.fault-in           a fault source latches estop
+#   estop-latch.0.ok-out  ->  iocontrol.0.emc-enable-in
+#
+# The one genuine fault source available is the hostmot2 WATCHDOG. It bites if
+# the driver stops writing to the board - i.e. if the Ethernet link drops, the
+# Pi locks up, or the realtime thread dies. It is not a substitute for an
+# estop button, but it does mean a comms failure stops the machine rather than
+# leaving the stepgens running on their last command.
+# =============================================================================
+
+net user-enable   iocontrol.0.user-request-enable => estop-latch.0.reset
+net enable-latch  estop-latch.0.ok-out            => iocontrol.0.emc-enable-in
+net watchdog      hm2_[HOSTMOT2](BOARD).0.watchdog.has_bit => estop-latch.0.fault-in
+
+
+# =============================================================================
+# TOOL CHANGE LOOPBACK
+# =============================================================================
+# No tool changer. Loop the requests straight back so a T/M6 in G-code does not
+# hang waiting for a changer that does not exist.
+# =============================================================================
+net tool-prep-loop   iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
+net tool-change-loop iocontrol.0.tool-change  => iocontrol.0.tool-changed
