@@ -4,13 +4,13 @@ Bu dosya, cevaplanmadan ilerlenemeyecek soruların kaydıdır. Her soru
 cevaplandığında **buraya cevabı ve tarihi yazılır** — silinmez, üstü çizilir.
 Karar geçmişini burada tutuyoruz.
 
-Son güncelleme: 2026-08-02
+Son güncelleme: 2026-08-05
 
 ---
 
-## 🔴 B1 — Y ekseninde kaç motor var?
+## 🟡 B1 — Y ekseninde kaç motor var?
 
-**Durum:** AÇIK  
+**Durum:** AÇIK — 2026-08-05'te 🔴'dan 🟡'ya düşürüldü (B2 kapandı, giriş kısıtı yok)  
 **Kim cevaplar:** Oğuzhan, panoyu açıp sayarak  
 **Neyi bloke ediyor:** Faz 5 (ilk config), Faz 6 (kablolama), Faz 7 (güvenlik zinciri)
 
@@ -37,14 +37,41 @@ Bu tek sayı giriş bütçesini belirliyor:
 **⚠ Dikkat:** Tek Y çıksa bile 5/5 doluyuz. Kapı switch'i, probe, spindle arıza
 girişi, su debi sensörü için **sıfır boşluk.** B2 her hâlükârda cevaplanmalı.
 
-**Cevap:** _(bekliyor)_
+---
+
+### 🟢 GÜNCELLEME (2026-08-05) — giriş bütçesi kısıtı ORTADAN KALKTI
+
+Yukarıdaki "5 ❌ sığmıyor" satırı **artık geçerli değil.** [B2](#-b2--encoder-pinleri-gpio-olarak-kullanılabiliyor-mu--kapandi-evet)
+kapandı: `num_encoders=0` ile IO 25-33 tam GPIO oluyor, yani **5 değil 14 giriş**
+var. Çift motorlu portal Y'nin istediği 6 giriş rahatça sığıyor, üstüne kapı
+switch'i / probe / debi sensörü için de yer kalıyor.
+
+| | Home | E-stop | Takım | Toplam | Kullanılabilir | Sonuç |
+|---|---:|---:|---:|---:|---:|---|
+| Tek motorlu Y | 3 | 1 | 1 | 5 | 14 | ✅ 9 boşta |
+| Çift motorlu Y | 4 | 1 | 1 | 6 | 14 | ✅ 8 boşta |
+
+Ayrıca kart 6 StepGen sağlıyor ve biz 3 kullanıyoruz, yani dördüncü eksen
+(Y-sağ) için StepGen 3, IO 10/11'de firmware değişikliği olmadan hazır
+([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)).
+
+**Yani B1 artık bir tasarım kısıtı değil, sadece bir bilgi eksiği.** Cevabı hâlâ
+gerekiyor — kaç joint tanımlayacağımızı, `trivkins coordinates=XYYZ` mi `XYZ` mi
+kullanacağımızı ve kaç home switch'i kablolayacağımızı belirliyor — ama artık
+"cevap yanlış çıkarsa yeniden tasarım" riski yok. **🔴 → 🟡 düşürülebilir**, yine de
+Faz 5 öncesi cevaplanması gereken ilk soru.
+
+Not: kart 7i96 değil 7i92 çıktı, yani toplam IO 51 değil 34. Bu yukarıdaki
+sayıları düşürdü ama sonucu değiştirmedi.
+
+**Cevap:** _(bekliyor — panoyu açıp saymak yeterli)_
 
 ---
 
-## 🔴 B2 — Encoder pinleri GPIO olarak kullanılabiliyor mu?
+## ✅ B2 — Encoder pinleri GPIO olarak kullanılabiliyor mu? — KAPANDI: **EVET**
 
-**Durum:** AÇIK — B1'den bağımsız, ama B1 çift Y çıkarsa kritikleşiyor  
-**Kim cevaplar:** `mesaflash --readhmid` çıktısı  
+**Durum:** ✅ **KAPANDI (2026-08-05)**  
+**Cevaplayan:** `mesaflash --device 7i92 --addr 10.10.10.10 --print-pd`  
 **Neyi bloke ediyor:** Faz 5, Faz 6  
 **İlgili:** [02-board-bringup.md](02-board-bringup.md) §3.4 Q4
 
@@ -66,7 +93,45 @@ Encoder girişleri diferansiyel alıcı ya da farklı bir seviye devresi
 arkasındaysa, 24V endüktif sensörü doğrudan bağlayamayabiliriz. Ohmmetre ile
 kontrol şart.
 
-**Cevap:** _(bekliyor)_
+**Cevap (2026-08-05): EVET — 9 pin GPIO olarak kullanılabilir.**
+
+`num_encoders=0` verildiğinde QCount modülünün üç örneği de instantiate edilmiyor
+ve **IO 25-33 tam GPIO olarak açılıyor**
+([hostmot2.adoc:400-401](../reference/linuxcnc/docs/src/drivers/hostmot2.adoc#L400-L401)):
+"General Purpose I/O pins on the board which are not used by a module instance
+are exported to HAL as 'full' GPIO pins."
+
+Pin tanımlayıcıları encoder pinlerinde Secondary Tag = QCount gösteriyor, yani
+firmware onları talep *edebiliyor* ama etmek zorunda değil:
+[printpd:110-154](board-dumps/printpd-10.10.10.10-2026-08-05.txt).
+
+**Giriş bütçesi — sorun tamamen çözüldü:**
+
+| Kaynak | Pin | Not |
+|---|---:|---|
+| Kalıcı GPIO (IO 20-24) | 5 | Secondary Tag **hiç yok** — hiçbir config ile kaybedilemez |
+| Encoder pinleri (IO 25-33) | 9 | `num_encoders=0` ile serbest |
+| Kullanılmayan StepGen 3-5 (IO 10-15) | 6 | `num_stepgens=3` ile serbest |
+| PWM (IO 16) | 1 | serbest, ama mermer makinede spindle için gerekecek |
+| SSerial (IO 0-3) | 4 | `sserial_port_0=xxxxxxxx` ile serbest |
+| **Toplam GPIO** | **28** | 34 pinin 28'i; 6'sı üç stepgen'de |
+
+**B1 (çift Y motoru) artık giriş bütçesi açısından sorun değil.** En kötü senaryo —
+çift motorlu portal Y — 4 home + 1 e-stop + 1 takım sensörü = **6 giriş** istiyor.
+Elimizde 5 kalıcı + 9 encoder = **14 giriş** var, artı dördüncü eksen için
+StepGen 3 (IO 10/11) firmware değişikliği olmadan hazır. Rahatça sığıyor.
+
+Not: kart 7i96 değil **7i92** çıktı (34 IO, 51 değil) — bu, kullanılabilir pin
+sayısını düşürdü ama yine de fazlasıyla yetiyor. Bkz.
+[10-7i92-pinout-verified.md](10-7i92-pinout-verified.md).
+
+**⚠ AÇIK KALAN KAVEAT — ön uç devresi doğrulanmadı.** Yukarıdaki uyarı aynen
+geçerli. Bu FPGA seviyesinde bir gerçek; dökümler pin tanımlayıcılarını gösteriyor,
+klemensin arkasındaki devreyi göstermiyor. **24 V sensörü doğrudan bağlamadan önce
+ohmmetre ile kontrol et.** Bu B2'yi açık tutmuyor — soru "GPIO olarak
+kullanılabilir mi" idi, FPGA tarafında cevap kesin EVET — ama kullanım öncesi
+ayrı bir donanım kontrolü gerekiyor. Fiilen B6'nın encoder klemensleri için
+tekrarı.
 
 ---
 
@@ -96,11 +161,12 @@ Detaylı zamanlama, akım ayarı ve 15 kHz hız tavanı:
 
 ---
 
-## 🟡 B5 — Bildirilen saat frekansı gerçek mi?
+## 🔵 B5 — Bildirilen saat frekansı gerçek mi? — **DÜŞÜRÜLDÜ: blocker değil**
 
-**Durum:** AÇIK  
+**Durum:** 🔵 **DÜŞÜK ÖNCELİK (2026-08-05'te blocker'dan düşürüldü)** — açık, ama
+hiçbir şeyi bloke etmiyor  
 **Kim cevaplar:** Osiloskop / mantık analizörü — **yazılımdan tespit edilemez**  
-**Neyi bloke ediyor:** Faz 9 (kalibrasyon) — ama semptomu Faz 5'te de çıkabilir
+**Neyi bloke ediyor:** ~~Faz 9~~ → **hiçbir şey.** İyi hijyen, gereklilik değil.
 
 `stepgen.c`'de `steplen`, `stepspace`, `dirsetup`, `dirhold` parametrelerinin
 dördü de `clock_frequency` ile ölçekleniyor
@@ -125,7 +191,55 @@ En azından dmesg'in bastığı `clock_frequency: %d Hz` satırı kaydedilmeli
 ([stepgen.c:1225](../reference/linuxcnc/src/hal/drivers/mesa-hostmot2/stepgen.c#L1225)).
 Devreye alma sırasında adım kaybı görülürse ilk şüpheli bu.
 
-**Cevap:** _(bekliyor)_
+---
+
+### Kısmi cevap (2026-08-05) — saat **100 MHz**, ve şüphe yanlış yerdeydi
+
+Dökümler saati verdi:
+
+```
+Clock Low frequency:  100.0000 MHz     readhmid:17
+Clock High frequency: 200.0000 MHz     readhmid:18
+StepGen ClockFrequency: 100.000 MHz    readhmid:68   ← stepgen bunu kullanıyor
+PWM     ClockFrequency: 200.000 MHz    readhmid:77   ← 200 MHz'deki tek modül
+```
+
+**Yukarıdaki 33.33 MHz hesabı geçersiz** — o rakam stok 7i96'dan geliyordu ve
+kart 7i96 değil, 7i92 çıktı. Doğru sayılar:
+
+```
+steplen = 10000 ns, beyan edilen 100 MHz  → reg = 1000 sayım  (limit 16383)
+dirsetup = 50000 ns                       → reg = 5000 sayım
+100 MHz'de temsil edilebilir maksimum     → 163.8 us
+```
+
+Hepsi rahatça sığıyor; en büyük değerimiz aralığın %31'ini kullanıyor, taşma
+ya da clamp uyarısı beklenmiyor.
+
+**50 MHz kristal konusunda yukarıdaki not doğruydu ama yeterince güçlü değildi:**
+kristal iç saat hakkında **hiçbir kanıt değil**. FPGA 100/200 MHz'i ondan PLL ile
+türetiyor. Fotoğraftaki kristali şüphe sebebi saymak, kanıtı fazla okumaktı.
+
+### Neden artık blocker değil
+
+1. **IDROM kendi içinde tutarlı.** Geometri kontrolleri geçti
+   (`hostmot2.c:692, :698, :708`) — IDROM'un beyan ettiği 2 × 17 = 34, sürücünün
+   7i92 için hardcode ettiğiyle birebir uyuşuyor. Modül saatleri de tutarlı
+   (biri hariç hepsi ClockLow, PWM ClockHigh).
+2. **Kart Mesa'nın gerçek bir 7i92'si gibi davranıyor**, uydurma bir klon gibi
+   değil. Firmware'in saat konusunda yalan söylemesi için bir sebep yok.
+3. **Kayıt zaten alınıyor.** `test-rig.hal` `debug_modules=1 debug_idrom=1` ile
+   yükleniyor, yani her açılışta dmesg'e `clock_frequency` satırı basılıyor.
+
+**Kalan risk:** IDROM yalnızca firmware'in ne *iddia ettiğini* söyler. Bunu
+kesinleştirmenin tek yolu hâlâ osiloskop. Ama artık "yapılmadan devam edilemez"
+değil, "sıra gelince yapılır" kategorisinde.
+
+**Yapılacak (öncelik: düşük):** [02-board-bringup.md](02-board-bringup.md) Step 7,
+test tezgahında — ucuz makine, sonuçsuz hata. Adım kaybı semptomu görülürse
+öncelik derhal yükselir.
+
+**Cevap:** Saat 100 MHz (IDROM). Bağımsız fiziksel doğrulama bekliyor, blocker değil.
 
 ---
 

@@ -2,11 +2,19 @@
 # test-rig.hal - Phase 1.5 test machine: 3-axis DIY wooden-frame router
 # =============================================================================
 #
-#   *** UNTESTED DRAFT. NOT READY TO RUN. ***
+#   *** UNTESTED DRAFT. NOT YET RUN ON THE MACHINE. ***
 #
-# The Zhulong board has NOT been detected yet. Every hm2_ pin name below is
-# built from [HOSTMOT2]BOARD in the INI, which is itself an assumption, and the
-# stepgen instance numbers are assumed to map 1:1 onto the AXIS connectors.
+# The board is now fully interrogated (2026-08-05). Every hm2_ pin name below is
+# built from [HOSTMOT2]BOARD = 7i92 in the INI, giving the prefix hm2_7i92.0,
+# and the stepgen-to-connector mapping is VERIFIED from the pin descriptors -
+# both were assumptions until the dumps arrived.
+#
+#   docs/board-dumps/readhmid-10.10.10.10-2026-08-05.txt
+#   docs/board-dumps/printpd-10.10.10.10-2026-08-05.txt
+#   docs/10-7i92-pinout-verified.md   <- the readable pin map
+#
+# What remains unverified here is the SWITCH WIRING - which sensor is at which
+# end, and its polarity. Those nets are still commented out.
 #
 #   grep -n 'ASSUMPTION:' configs/test-rig/test-rig.hal
 #
@@ -33,18 +41,33 @@ loadrt [EMCMOT]EMCMOT servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JO
 # -----------------------------------------------------------------------------
 # hostmot2 driver, with module debug output ENABLED.
 #
-# debug_modules=1 is REQUIRED for this config, not optional. It is what makes
-# the driver print its per-module summary, including the line we need:
+# debug_modules=1 makes the driver print its per-module summary, including:
 #
-#     hm2/hm2_7i96.0:     clock_frequency: NNNNNNNN Hz (NN.NN MHz)
+#     hm2/hm2_7i92.0:     clock_frequency: 100000000 Hz (100.00 MHz)
 #
 # That print is gated behind `if (debug_modules)` at hostmot2.c:1672-1675, and
 # the parameter defaults to 0 (hostmot2.c:53-54), so without this flag the line
 # never appears. The clock matters because steplen, stepspace, dirsetup and
 # dirhold are ALL scaled by it (stepgen.c:348, :359, :370, :381) and the driver
-# takes the value on faith from the IDROM - it cannot verify it. Our board
-# carries a 50.000 MHz crystal while a stock 7i96 declares 33 MHz, so this is a
-# live question. See docs/05 section e and docs/09.
+# takes the value on faith from the IDROM - it cannot verify it.
+#
+# CLOCK RESOLVED (2026-08-05) - and our earlier assumption was WRONG.
+#   We previously expected 33 MHz, reasoning from the stock 7i96. The board is
+#   a 7i92 and its IDROM reports:
+#       Clock Low frequency:  100.0000 MHz
+#       Clock High frequency: 200.0000 MHz
+#   (readhmid-10.10.10.10-2026-08-05.txt:17-18)
+#   The StepGen module's own ClockFrequency line confirms it uses the 100 MHz
+#   clock (readhmid:68); the PWM module is the only one on 200 MHz (readhmid:77).
+#
+#   Note the 50.000 MHz crystal we observed on the board in docs/04 is NOT the
+#   logic clock - the FPGA synthesises 100/200 MHz from it via a PLL, which is
+#   entirely normal. The crystal was never evidence of the logic clock rate, and
+#   treating it as suspicious was over-reading it.
+#
+#   These flags are kept ON deliberately. They cost nothing at load time and the
+#   dmesg output is the record of what the firmware declared - worth having every
+#   time the config is loaded, not just once.
 #
 # debug_idrom=1 additionally dumps the IDROM header (gated at
 # hostmot2.c:742-744), which gives ClockLow/ClockHigh independently.
@@ -67,12 +90,15 @@ loadrt estop_latch
 # Read first, compute, write last. estop-latch runs after the write so a fault
 # raised this cycle is latched before the next one.
 #
-# ASSUMPTION: the component name hm2_[HOSTMOT2](BOARD).0 resolves to
-#   hm2_7i96.0. hm2_eth builds this from the board's OWN reported name string
-#   (hm2_eth.c:1487) - we do not get to choose it. If the board reports
-#   anything not beginning "7I96", every line below that says
-#   hm2_[HOSTMOT2](BOARD) is wrong, and the fix is one edit to [HOSTMOT2]BOARD
-#   in the INI. Resolved by: halcmd show pin
+# RESOLVED (was assumption A2): hm2_[HOSTMOT2](BOARD).0 resolves to hm2_7i92.0.
+#   The board reports itself as "7I92" over LBP16 and its IDROM says
+#   BoardName MESA7I92 (readhmid-10.10.10.10-2026-08-05.txt:4-6, :12), so
+#   hm2_eth takes the 7I92 branch at hm2_eth.c:1183 and builds the name
+#   "hm2_7i92.0" via hm2_eth.c:1487.
+#
+#   We previously assumed a 7i96 and prefix hm2_7i96.0. That was WRONG.
+#   Corrected here and in [HOSTMOT2]BOARD, which is the single place the prefix
+#   is defined - every line below indirects through it.
 
 addf hm2_[HOSTMOT2](BOARD).0.read      servo-thread
 addf motion-command-handler            servo-thread
@@ -85,24 +111,29 @@ addf estop-latch.0                     servo-thread
 # STEPGEN CONFIGURATION
 # =============================================================================
 #
-# ASSUMPTION: stepgen.00 / .01 / .02 drive the AXIS 0 / AXIS 1 / AXIS 2
-#   connectors respectively, and therefore X / Y / Z.
+# RESOLVED (was assumption A4): StepGen instance N drives the AXIS N connector,
+#   so stepgen.00/.01/.02 are AXIS 0/1/2 and therefore X/Y/Z.
 #
-#   This is the single biggest assumption in this file. The Zhulong has SIX
-#   AXIS connectors, and which stepgen instance is wired to which connector is
-#   decided by the vendor's bitfile, not by us. There is no reason beyond
-#   convention to expect AXIS 0 == stepgen.00.
+#   The pin descriptors give the mapping exactly. From
+#   readhmid-10.10.10.10-2026-08-05.txt:108-119 and
+#   printpd-10.10.10.10-2026-08-05.txt:29-88, on connector P2:
 #
-#   Worse, docs/03 established that on the stock Mesa bitfile the per-channel
-#   order is Dir BEFORE Step, which is not the intuitive order - and our board
-#   runs a different bitfile entirely, so even that is no guide.
+#     StepGen 0   IO  4 Step   IO  5 Dir      <- AXIS 0, used as X
+#     StepGen 1   IO  6 Step   IO  7 Dir      <- AXIS 1, used as Y
+#     StepGen 2   IO  8 Step   IO  9 Dir      <- AXIS 2, used as Z
+#     StepGen 3   IO 10 Step   IO 11 Dir      <- disabled by num_stepgens=3
+#     StepGen 4   IO 12 Step   IO 13 Dir      <- disabled
+#     StepGen 5   IO 14 Step   IO 15 Dir      <- disabled
 #
-#   Resolved by: mesaflash --readhmid, then read the per-pin listing for lines
-#   of the form
-#       IO Pin NNN (...): StepGen #N, pin Step (Output)
-#   and note which IO number each stepgen instance and signal lands on. Then
-#   confirm physically: command a small move on one stepgen at a time with the
-#   motors uncoupled and see which one turns.
+#   Note the order is Step then Dir, ascending - NOT the Dir-before-Step order
+#   docs/03 found in the stock Mesa 7i96 data. Another reason that document does
+#   not apply to this board.
+#
+#   Still worth confirming physically before coupling the mechanics: command a
+#   small move on one stepgen at a time, motors uncoupled, and check the right
+#   one turns. The dump proves which FPGA pins carry which signal; it cannot
+#   prove the vendor wired AXIS 0's terminals to those pins rather than
+#   crossing them.
 #
 # step_type = 0 selects Step/Dir output (hostmot2.adoc:528-532).
 #   0 = Step/Dir, 1 = Up/Down, 2 = Quadrature. TB6560 wants Step/Dir.
@@ -222,13 +253,27 @@ net motor.02.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-fb => joint.2.m
 #   moves, and in which direction.
 #
 # QUESTION 2 - SENSOR-TO-END MAPPING. Which physical end of which axis is each
-#   sensor at? docs/08 confirms the IO NUMBERS (20-24 are the five isolated
-#   inputs, and the silkscreen numbers really are global IO numbers). It does
-#   NOT establish which end of which axis each one sits at. That is still
-#   unverified.
+#   sensor at?
 #
-# ASSUMPTION: the planned mapping below. From docs, sensor-to-end assignment
-#   NOT yet verified.
+#   NOW VERIFIED - the IO numbers and their permanence:
+#   IO 17 through 24 have NO Secondary Tag whatsoever in the pin descriptors
+#   (printpd-10.10.10.10-2026-08-05.txt:94-109). They are not "GPIO until some
+#   module claims them" - there is no module that CAN claim them. They are
+#   permanently, unconditionally GPIO, whatever the config string says. That is
+#   the strongest form this fact could take, and it retires any worry about the
+#   inputs being stolen by a module.
+#
+#   The vendor silkscreen maps straight onto global IO numbers, as docs/08
+#   hypothesised and the dumps confirm:
+#       IO 17 = CW        IO 18 = OUT 1     IO 19 = OUT 2
+#       IO 20 21 22 23 24 = the five isolated inputs
+#
+#   STILL UNVERIFIED - which physical end of which axis each sensor sits at.
+#   The dumps describe the FPGA and its pin descriptors. They say nothing about
+#   where on the frame a switch is bolted.
+#
+# ASSUMPTION: the planned mapping below. IO numbers confirmed; sensor-to-end
+#   assignment NOT verified.
 #
 #     gpio.020  ->  joint.0 (X) home + one limit end
 #     gpio.021  ->  joint.0 (X) other limit end

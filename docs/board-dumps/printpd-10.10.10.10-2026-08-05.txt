@@ -1,0 +1,154 @@
+Kaynak: mesaflash --device 7i92 --addr 10.10.10.10 --print-pd
+Tarih : 2026-08-05
+
+Önemli: IO 17-24 için HİÇ "Secondary Tag" satırı yok — bu pinler kalıcı olarak
+saf GPIO. IO 25-33'te Secondary Tag = QCount var, yani HAL config'inde encoder
+istenmezse bu pinler de GPIO olarak kalır.
+
+34 HM2 Pin Descriptors:
+    pin 0:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0xC1 (SSerial)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x01 (RXData0, Input)
+    pin 1:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0xC1 (SSerial)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x81 (TXData0, Output)
+    pin 2:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0xC1 (SSerial)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x02 (RXData1, Input)
+    pin 3:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0xC1 (SSerial)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x82 (TXData1, Output)
+    pin 4:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x81 (Step/Table1, Output)
+    pin 5:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x82 (Dir/Table2, Output)
+    pin 6:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x01
+        Secondary Pin: 0x81 (Step/Table1, Output)
+    pin 7:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x01
+        Secondary Pin: 0x82 (Dir/Table2, Output)
+    pin 8:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x02
+        Secondary Pin: 0x81 (Step/Table1, Output)
+    pin 9:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x02
+        Secondary Pin: 0x82 (Dir/Table2, Output)
+    pin 10:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x03
+        Secondary Pin: 0x81 (Step/Table1, Output)
+    pin 11:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x03
+        Secondary Pin: 0x82 (Dir/Table2, Output)
+    pin 12:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x04
+        Secondary Pin: 0x81 (Step/Table1, Output)
+    pin 13:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x04
+        Secondary Pin: 0x82 (Dir/Table2, Output)
+    pin 14:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x05
+        Secondary Pin: 0x81 (Step/Table1, Output)
+    pin 15:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x05 (StepGen)
+        Secondary Unit: 0x05
+        Secondary Pin: 0x82 (Dir/Table2, Output)
+    pin 16:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x06 (PWM)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x81 (PWM, Output)
+    pin 17:
+        Primary Tag: 0x03 (IOPort)
+    pin 18:
+        Primary Tag: 0x03 (IOPort)
+    pin 19:
+        Primary Tag: 0x03 (IOPort)
+    pin 20:
+        Primary Tag: 0x03 (IOPort)
+    pin 21:
+        Primary Tag: 0x03 (IOPort)
+    pin 22:
+        Primary Tag: 0x03 (IOPort)
+    pin 23:
+        Primary Tag: 0x03 (IOPort)
+    pin 24:
+        Primary Tag: 0x03 (IOPort)
+    pin 25:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x01 (Quad-A, Input)
+    pin 26:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x02 (Quad-B, Input)
+    pin 27:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x00
+        Secondary Pin: 0x03 (Quad-IDX, Input)
+    pin 28:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x01
+        Secondary Pin: 0x01 (Quad-A, Input)
+    pin 29:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x01
+        Secondary Pin: 0x02 (Quad-B, Input)
+    pin 30:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x01
+        Secondary Pin: 0x03 (Quad-IDX, Input)
+    pin 31:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x02
+        Secondary Pin: 0x01 (Quad-A, Input)
+    pin 32:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x02
+        Secondary Pin: 0x02 (Quad-B, Input)
+    pin 33:
+        Primary Tag: 0x03 (IOPort)
+        Secondary Tag: 0x04 (QCount)
+        Secondary Unit: 0x02
+        Secondary Pin: 0x03 (Quad-IDX, Input)

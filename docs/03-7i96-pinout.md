@@ -1,6 +1,49 @@
 # 03 — Stock Mesa 7i96 IO Pin Map (from LinuxCNC source)
 
-> # 🛑 DO NOT WIRE OUR BOARD FROM THIS DOCUMENT
+> # 🛑 SUPERSEDED — WRONG BOARD FAMILY ENTIRELY
+>
+> ## Our board is a **7i92**, not a 7i96. This document is about a family we are not using.
+>
+> **Established 2026-08-05 from `mesaflash --readhmid`.** The Zhulong V2.0 reports itself
+> as **`7I92`** over LBP16, and its IDROM says **`BoardName MESA7I92`**. `mesaflash
+> --device 7i96` fails outright with *"no 7I96 board found"*.
+>
+> | | 7i96 (this document) | **7i92 (our actual board)** |
+> |---|---|---|
+> | IO pins | 51 (3 × 17) | **34 (2 × 17)** |
+> | Connectors | P1, TB1, TB2, TB3 | **P2 (IO 0–16), P1 (IO 17–33)** |
+> | HAL prefix | `hm2_7i96.0` | **`hm2_7i92.0`** |
+> | Driver branch | `hm2_eth.c:1319` | **`hm2_eth.c:1183`** |
+>
+> ### → The real, measured pin map is [10-7i92-pinout-verified.md](10-7i92-pinout-verified.md).
+>
+> Sources: [readhmid-10.10.10.10-2026-08-05.txt](board-dumps/readhmid-10.10.10.10-2026-08-05.txt)
+> lines 4–6, 12, 15–16 · [printpd-10.10.10.10-2026-08-05.txt](board-dumps/printpd-10.10.10.10-2026-08-05.txt)
+>
+> ---
+>
+> **Why this document is kept.** Its analysis of *driver behaviour* is still correct and
+> still useful reference material, because it is about `hm2_eth` and `hostmot2` generally,
+> not about the 7i96 specifically:
+>
+> - How the board-name string is matched, and how the HAL prefix is derived from it —
+>   which is exactly the mechanism that produced `hm2_7i92.0`.
+> - How `pin->port_num = i / port_width` maps global IO numbers to connectors — the same
+>   arithmetic, just with 2 ports instead of 3.
+> - The `ioport_connector_name[]` ordering inconsistency, and the proof that
+>   `io_connector_pin_names[]` wins for pin labelling.
+> - The two `hm2_print_pin_usage()` output forms, which is how you read a `readhmid` dump.
+>
+> What is **not** applicable is the pin table itself and everything derived from a 51-pin,
+> 3-connector geometry.
+>
+> The original warning below — that the Zhulong is not pin-compatible with the stock
+> 7i96 — was correct. It just understated the case: the board is not even the same
+> family.
+
+---
+
+> # 🛑 DO NOT WIRE OUR BOARD FROM THIS DOCUMENT (original warning, still true)
 >
 > ## This describes the **stock Mesa 7i96**. The Zhulong V2.0 is **NOT pin-compatible with it.**
 >
