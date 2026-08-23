@@ -138,7 +138,11 @@ Her eklem için `HOME_IGNORE_LIMITS = YES` (home ve limit aynı switch).
 
 **5. Gerçek strok ölçümü** → soft limitler.
 
-**6. Homing.** ⚠ Sıralama önemli: Z önce (geri çekilsin), sonra X, sonra Y.
+**6. Homing.** ⚠ Sıralama: **Z → Y → X**. Kaynak `configs/test-rig/test-rig.ini`:
+`[JOINT_2] Z HOME_SEQUENCE = 0`, `[JOINT_1] Y = 1`, `[JOINT_0] X = 2`.
+Kritik olan Z'nin ilk olması (takım geri çekilsin); X ile Y arasındaki sıra
+güvenlik açısından fark etmiyor. **LinuxCNC INI'ye uyar, dokümana değil** — bu iki
+kaynak çelişirse INI kazanır.
 `HOME_SEARCH_VEL`'i ilk denemede 1 mm/s'ye düşür. `HOME_IGNORE_LIMITS = YES` olduğu
 için switch bulunamazsa **durduracak hiçbir şey yok** (`ini-homing.adoc:46`).
 

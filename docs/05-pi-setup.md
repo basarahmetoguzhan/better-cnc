@@ -1,10 +1,41 @@
-# 05 — Raspberry Pi Platform Setup
+# 05 — Controller Platform Setup
 
-Getting the Pi to a state where it can talk to the Zhulong board. This is the
-*platform* runbook — OS image, realtime kernel, latency validation, network. Board
-bring-up itself is [02-board-bringup.md](02-board-bringup.md).
+Getting the controller host to a state where it can talk to the Zhulong board.
+This is the *platform* runbook — OS image, realtime kernel, latency validation,
+network. Board bring-up itself is [02-board-bringup.md](02-board-bringup.md).
 
-**Status: DERIVED.** Nothing here has been executed on real hardware.
+> ## ⚠️ PLATFORM CHANGED — we are on amd64, not a Pi
+>
+> **Updated 2026-08-23.** This document was written assuming a Raspberry Pi. That
+> is no longer what we are running.
+>
+> | | Originally planned | **Actually running** |
+> |---|---|---|
+> | Host | Raspberry Pi 4 | **Monster laptop, LinuxCNC live USB + 10 GB persistence** |
+> | Architecture | arm64 | **amd64** |
+> | Kernel | preempt-rt arm64 | **`6.12.95+deb13-rt-amd64` (PREEMPT_RT)** |
+> | NIC | Pi built-in | **`enp3s0` (Realtek RTL8125, 100 Mbps Full)** |
+>
+> Source: [DURUM.md:20-27](DURUM.md).
+>
+> **Why the Pi 3 was eliminated — and it vindicates this document's own advice.**
+> [DURUM.md:110](DURUM.md) records: *"Pi 3 elendi (Ethernet USB arkasında,
+> `hm2_eth` için uygun değil)"* — the Pi 3's Ethernet sits behind its USB
+> controller. Section (c) below already quotes `hm2_eth(9)` saying *"Wireless and
+> USB network interfaces are not suitable"*. So the Pi 3 was ruled out by exactly
+> the constraint this runbook had already written down.
+>
+> A **Pi 4 or 5** remains viable — their Ethernet is a genuine PCIe device, not
+> USB-attached — and everything below about arm64 images, Pi 4/5 image selection
+> and the Raspbian warnings is **kept as the future-Pi path**, not deleted. What
+> changed is which column is current, not which is possible.
+>
+> Everything in sections (b) latency, (c) network and (e) clock capture applies to
+> both hosts unchanged.
+
+**Status: PARTLY VERIFIED.** The amd64 live-USB platform is running and the board
+is talking to it ([DURUM.md](DURUM.md)). The Pi path below has never been
+executed. Latency has never been measured on either.
 
 Every technical claim is cited to `reference/`. Where the LinuxCNC source and docs do
 **not** settle a question, that is stated explicitly — those are the points to confirm
@@ -55,13 +86,22 @@ lists RTAI as amd64-only — there is no ARM RTAI build.
 (The source table has two cosmetic defects — a `Debian Troxie` typo and the header row
 placed third. Content is unambiguous.)
 
-**arm64 + preempt-rt + `linuxcnc-uspace` is a supported combination.** That is our
-target.
+**Both amd64 and arm64 are supported with preempt-rt + `linuxcnc-uspace`.**
+
+- **amd64 — what we run now.** The live USB is Debian 13 (Trixie),
+  `6.12.95+deb13-rt-amd64` ([DURUM.md:22](DURUM.md)). This is the top row of the
+  table, and it is a first-class supported combination, not a fallback.
+- **arm64 — the future-Pi path.** Equally supported per the same table. Kept
+  documented below for when/if a Pi 4 or 5 becomes the permanent controller.
 
 **4. Minimum hardware**, from
 [system-requirements.adoc:29](../reference/linuxcnc/docs/src/getting-started/system-requirements.adoc#L29):
 
 > * 1.2 GHz 64-bit x86 processor or **Raspberry Pi 4 or better.**
+
+Note the "or" — the x86 branch is what our laptop satisfies. And note that the
+Pi floor is a **Pi 4**: the Pi 3 we tried is below the documented minimum quite
+apart from its USB-attached Ethernet.
 
 **5. Use the LinuxCNC Pi image, not Raspberry Pi OS.** Two explicit warnings:
 
@@ -143,8 +183,9 @@ exits 2 with install guidance if absent.
 |---|---|---|
 | Realtime kernel | **PREEMPT_RT** | **Settled by source** — only option for Mesa Ethernet cards |
 | LinuxCNC package | **`linuxcnc-uspace`** | **Settled by source** |
-| Architecture | **arm64** | **Settled by source** — supported on Bookworm and Trixie |
-| Minimum board | **Raspberry Pi 4** | **Settled by source** |
+| Architecture | **amd64 now**; arm64 for a future Pi | **Both settled by source**; which we run is [DURUM.md:22](DURUM.md) |
+| Host | **Laptop on a live USB** | **VERIFIED** — running |
+| Minimum board, if a Pi | **Raspberry Pi 4** (Pi 3 ruled out) | **Settled by source** + [DURUM.md:110](DURUM.md) |
 | Image type | Full SD-card image via Raspberry Pi Imager | **Settled by source** |
 | Pi 4 vs Pi 5 image | Separate images — match your hardware | **Settled by source** |
 | Debian base | Bookworm **or** Trixie | **Not settled** — check after flashing |

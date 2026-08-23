@@ -39,6 +39,19 @@ SCREENS = (
 #: TB6560 optocoupler step-frequency ceiling. docs/09-tb6560-drivers.md:77
 TB6560_STEP_CEILING_HZ = 15000.0
 
+#: The homing order the prose docs state, and where they state it.
+#:
+#: This is a declared copy of what the documentation claims - the UI does not
+#: parse Turkish prose at runtime to find it. That means the constant can drift
+#: from the docs, so tests/test_homing_gate.py reads both files and asserts this
+#: value still appears in them. Same principle as the INI numbers: a value held
+#: in two places without a test tying them together is a bug waiting to happen.
+#:
+#: Corrected 2026-08-23: both docs previously said "Z → X → Y", which
+#: disagreed with the INI. The INI was right and the docs now agree with it.
+DOCUMENTED_HOME_ORDER = "Z → Y → X"
+DOCUMENTED_HOME_ORDER_SOURCES = ("docs/DURUM.md", "docs/MERMER-GECIS.md")
+
 
 # ---------------------------------------------------------------------------
 # Capabilities
@@ -229,25 +242,32 @@ def homing_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
     }
 
 
-def homing_order_note(config: MachineConfig) -> str:
-    """Surface a real disagreement between the config and the prose docs.
+def homing_order_note(
+    config: MachineConfig, documented_order: str = DOCUMENTED_HOME_ORDER
+) -> str:
+    """Drift detector between the INI's HOME_SEQUENCE and the prose docs.
 
-    The INI's HOME_SEQUENCE gives Z(0) -> Y(1) -> X(2). docs/DURUM.md:141 and
-    docs/MERMER-GECIS.md:126 both say "Z, then X, then Y". LinuxCNC obeys the
-    INI, so the INI is what the UI displays - but the discrepancy is worth
-    stating rather than quietly resolving in favour of whichever we read last.
+    Returns "" when they agree - which they do as of 2026-08-23, after the docs
+    were corrected to match the INI's Z -> Y -> X.
+
+    The comparison target is injectable so the detector itself can be tested
+    against a disagreeing value; without that, a detector that never fires and
+    a detector that cannot fire look identical.
+
+    LinuxCNC obeys the INI, so the INI is always what the UI displays. The note
+    only ever says "these two sources disagree, go and fix one".
     """
     if not config.present or not config.axes:
         return ""
     by_seq = sorted(config.axes, key=lambda a: abs(a.home_sequence))
     ini_order = " → ".join(a.axis for a in by_seq)
-    doc_order = "Z → X → Y"
-    if ini_order == doc_order:
+    if ini_order == documented_order:
         return ""
     return (
-        "INI'deki HOME_SEQUENCE sırası {}. Dokümanlarda (docs/DURUM.md:141, "
-        "docs/MERMER-GECIS.md:126) {} yazıyor. LinuxCNC INI'ye uyar; "
-        "bu tutarsızlık giderilmeli.".format(ini_order, doc_order)
+        "INI'deki HOME_SEQUENCE sırası {}. Dokümanlarda ({}) {} yazıyor. "
+        "LinuxCNC INI'ye uyar; bu tutarsızlık giderilmeli.".format(
+            ini_order, ", ".join(DOCUMENTED_HOME_ORDER_SOURCES), documented_order
+        )
     )
 
 

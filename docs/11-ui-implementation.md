@@ -14,8 +14,8 @@ run against a live LinuxCNC instance.** It renders from a mock adapter.
 | | |
 |---|---|
 | Stack | Python 3 stdlib only + server-side HTML |
-| Tests | 315, all passing, `make test` |
-| Coverage | **94.0 %** (`make coverage`) |
+| Tests | 321, all passing, `make test` |
+| Coverage | **94.1 %** (`make coverage`) |
 | Screens | 6, as the prototype: Kontrol / Program / Probing / Takımlar / Alarmlar / Makine |
 | Profiles | `test-rig` (verified) and `marble` (TODO placeholders) |
 | Prototype facts corrected | 24, table below |
@@ -348,20 +348,42 @@ constant, and the shared home/limit warning is rendered prominently:
 > sırasında limitler yok sayılır: switch'in yanlış tarafından başlanırsa ekseni
 > durduracak hiçbir şey yoktur (ini-homing.adoc:46).
 
-### ⚠️ A discrepancy this surfaced
+### ⚠️ A discrepancy this surfaced — now RESOLVED
 
 Reading the order from the config rather than hardcoding it exposed a real
 disagreement in the repo:
 
-| Source | Order |
-|---|---|
-| `configs/test-rig/test-rig.ini` — `HOME_SEQUENCE` Z=0, Y=1, X=2 | **Z → Y → X** |
-| `docs/DURUM.md:141` and `docs/MERMER-GECIS.md:126` | **Z → X → Y** |
+| Source | Said | Now says |
+|---|---|---|
+| `configs/test-rig/test-rig.ini` — `HOME_SEQUENCE` Z=0, Y=1, X=2 | **Z → Y → X** | unchanged — it was right |
+| `docs/DURUM.md` and `docs/MERMER-GECIS.md` | Z → X → Y | **Z → Y → X**, citing the INI as authority |
 
-**LinuxCNC obeys the INI**, so the UI shows `Z → Y → X` and renders a
-`TUTARSIZLIK` (inconsistency) banner naming both sources. It is not the UI's
-place to pick a winner — but it should not hide the conflict either. **One of the
-two needs correcting; the UI cannot tell you which was intended.**
+**Resolved 2026-08-23:** the INI was correct and the two prose docs had drifted.
+Both were corrected to match and now name `test-rig.ini` as the authority. The
+`TUTARSIZLIK` banner is consequently clear, and a test asserts it is clear.
+
+**One honest correction to how this was built.** The first implementation
+compared the INI against a *hardcoded string literal* buried in the function
+body (`doc_order = "Z → X → Y"`). It detected the drift, but it was not really
+"reading both sources" — it was reading one source and a copy of the other, and
+that copy could itself go stale without anyone noticing.
+
+That is now fixed the same way every other duplicated value in this project is:
+
+- The claimed order is a **declared module constant** with its citation,
+  `DOCUMENTED_HOME_ORDER` / `DOCUMENTED_HOME_ORDER_SOURCES`, not a literal hidden
+  in a function.
+- The comparison target is **injectable**, so the detector can be tested against
+  a disagreeing value. Without that, "never fires" and "cannot fire" look
+  identical from the outside — and a safety-adjacent detector that has silently
+  stopped working is worse than no detector.
+- **Tests read the actual doc files** and assert the constant still appears in
+  both, plus that neither still contains the old wrong order. If the docs drift
+  again, the suite fails and names the file.
+
+Four tests cover this: banner clear when they agree, detector still fires when
+they do not, the constant matches both docs on disk, and the constant matches the
+INI. The drift can now be caught from either end.
 
 ### C. Link health
 
@@ -402,8 +424,8 @@ Removed from the tool table. Stated on both the Takımlar and Probing screens:
 ## Tests
 
 ```bash
-make test          # 315 tests, everything incl. scripts/test_grbl2ini.py
-make coverage      # 94.0 %
+make test          # 321 tests, everything incl. scripts/test_grbl2ini.py
+make coverage      # 94.1 %
 ```
 
 `ui/tests/run_all.py` discovers both `ui/tests` and `scripts`, so the
@@ -414,14 +436,14 @@ pre-existing `test_grbl2ini.py` runs in the same command.
 | `test_capabilities.py` | the never-hidden contract, per capability; profile completeness; TODO vs ABSENT |
 | `test_config_traceability.py` | every hardware number vs the INI, read with an independent parser |
 | `test_estop.py` | hardware/software separation at three levels |
-| `test_homing_gate.py` | the gate, order from config, the discrepancy banner |
+| `test_homing_gate.py` | the gate, order from config, the drift detector, and the docs read from disk |
 | `test_unmeasured.py` | travel and latency unmeasured; no fabricated default leaks |
 | `test_inputmap_and_link.py` | verified input map, Z asymmetry, `.in_not`, link health |
 | `test_mdi_tools_adapter.py` | MDI entry/history, probe-is-not-a-tool, the LinuxCNC mapping |
 | `test_prototype_corrections.py` | table-driven guard on all 24 corrections |
 | `test_server_and_iniload.py` | HTTP routes, malformed input, INI edge cases |
 
-### Coverage: 94.0 %
+### Coverage: 94.1 %
 
 ```
 bettercnc.adapter          366      284    77.6%
@@ -431,10 +453,10 @@ bettercnc.state            209      204    97.6%
 bettercnc.profiles         247      243    98.4%
 bettercnc.iniload           90       89    98.9%
 bettercnc.capabilities      94       93    98.9%
-bettercnc.viewmodel        408      404    99.0%
+bettercnc.viewmodel        410      407    99.3%
 bettercnc.render           487      484    99.4%
 ------------------------------------------------
-TOTAL                     2241     2107    94.0%
+TOTAL                     2243     2110    94.1%
 ```
 
 ### What is NOT covered — plainly
@@ -475,7 +497,6 @@ test for concurrent requests racing.
 - **Y axis DIR fault** (`docs/DURUM.md:12`) is rendered as an error in the alarm
   log, from the profile's notes. It is hardcoded there rather than read from a
   live pin, because it is a wiring fault, not a machine state.
-- **Homing order discrepancy** needs resolving in the repo — see above.
 - **`LinuxCncAdapter` needs one session on the machine.** Swap the line in
   `build_session`, run `make ui`, and compare against `halmeter`.
 - **Marble profile is a skeleton.** Eleven TODOs, no INI, no input map. It exists

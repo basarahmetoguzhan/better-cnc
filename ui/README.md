@@ -37,7 +37,7 @@ make test-v          # ayrıntılı
 make coverage        # satır kapsaması (stdlib, `coverage` paketi gerekmiyor)
 ```
 
-315 test, hepsi geçiyor. Kapsama **%94.0**.
+321 test, hepsi geçiyor. Kapsama **%94.1**.
 
 ## Neden saf stdlib
 

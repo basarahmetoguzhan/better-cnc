@@ -117,13 +117,30 @@ fiziksel klemenste. Tek Y senaryosunda:
 
 ## 5. Güvenlik — mermer makinesinde pazarlık konusu değil
 
+> ### Duran kural
+>
+> **A green "powered" light on an unsensed safety chain is worse than an honest
+> question mark.**
+>
+> *Algılanmayan bir güvenlik zincirinde yeşil "güç var" lambası, dürüst bir soru
+> işaretinden daha kötüdür.*
+>
+> Bir durumu ölçmüyorsak, ölçüyormuş gibi göstermeyiz. Arayüz bunu böyle
+> uyguluyor: test tezgahında donanımsal acil stop girişi olmadığı için sürücü
+> gücü **BİLİNMİYOR** olarak render ediliyor — `LIVE` değil
+> (`ui/bettercnc/state.py`, `DrivePower.UNKNOWN`). Aynı kural ölçülmemiş stroka
+> ("ölçülmedi") ve ölçülmemiş gecikmeye ("—") de uygulanıyor.
+>
+> Bu kural mermer makinesinde de geçerli: acil stop girişi eklendiğinde
+> **zincirin gerçekten okunduğu** doğrulanmadan yeşil gösterilmez.
+
 | Konu | Gereklilik |
 |---|---|
 | **Acil stop** | Sürücü ve iğ mili gücünü **donanımsal** kesmeli. LinuxCNC'nin haberi olması iyidir ama yazılım güvenlik fonksiyonu değildir. Pi/PC çökse bile makine durmalı |
 | **Su kilidi** | Debi yoksa iğ mili çalışmaz. HAL'de kurulacak |
 | **Soft limitler** | Strok ölçülüp yazılacak. Test tezgahında da eksik, orada da tamamlanacak |
 | **Limit switch'ler** | Home ile paylaşılıyor → her eklemde `HOME_IGNORE_LIMITS = YES`. Bunun sonucu: **homing sırasında limitleri durduracak hiçbir şey yok.** Switch'in yanlış tarafından başlanırsa sert çarpışma (`ini-homing.adoc:46`). Homing öncesi eksenin doğru tarafta olduğu doğrulanmalı |
-| **Homing sırası** | Önce Z (geri çekilsin), sonra X, sonra Y |
+| **Homing sırası** | **Z → Y → X.** Test tezgahında `HOME_SEQUENCE` Z=0, Y=1, X=2 (`configs/test-rig/test-rig.ini`). Kritik olan Z'nin ilk olması — takım geri çekilsin. X/Y arası sıra serbest. Mermer makinesinde çift Y varsa iki Y joint'i **negatif** `HOME_SEQUENCE` ile senkron home eder |
 
 ---
 

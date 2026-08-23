@@ -141,19 +141,97 @@ class TestHomingOrder(unittest.TestCase):
         markup = html("test-rig", "kontrol")
         self.assertIn("Gerekli sıra", markup)
 
-    def test_discrepancy_with_prose_docs_is_surfaced(self):
-        """The INI gives Z->Y->X; docs/DURUM.md:141 says Z->X->Y. The UI shows
-        the INI (LinuxCNC obeys it) and flags the disagreement rather than
-        silently picking a side."""
+    def test_docs_and_ini_now_agree_so_no_banner(self):
+        """Corrected 2026-08-23: both docs were changed to Z -> Y -> X, matching
+        the INI. The drift banner must therefore be clear."""
         vm = view("test-rig", "kontrol")
-        note = vm["kontrol"]["homing"]["order_note"]
-        self.assertTrue(note, "the known INI/doc discrepancy is not surfaced")
+        self.assertEqual(
+            vm["kontrol"]["homing"]["order_note"], "",
+            "docs and INI agree, so no discrepancy should be reported",
+        )
+
+    def test_no_discrepancy_banner_is_rendered(self):
+        self.assertNotIn("TUTARSIZLIK", html("test-rig", "kontrol"))
+
+    def test_drift_detector_still_fires_when_they_disagree(self):
+        """A detector that never fires and one that cannot fire look identical
+        from the outside, so prove it can still fire."""
+        from bettercnc.configmodel import load_machine_config
+        from bettercnc.profiles import load_profile
+        from bettercnc.viewmodel import homing_order_note
+
+        config = load_machine_config(load_profile("test-rig"))
+        note = homing_order_note(config, documented_order="Z → X → Y")
+        self.assertTrue(note)
         self.assertIn("HOME_SEQUENCE", note)
+        self.assertIn("Z → Y → X", note)   # what the INI actually says
+        self.assertIn("Z → X → Y", note)   # what the (fake) doc claims
         self.assertIn("docs/DURUM.md", note)
 
-    def test_discrepancy_note_is_rendered(self):
-        markup = html("test-rig", "kontrol")
-        self.assertIn("TUTARSIZLIK", markup)
+    def test_drift_detector_is_quiet_without_a_config(self):
+        from bettercnc.configmodel import load_machine_config
+        from bettercnc.profiles import load_profile
+        from bettercnc.viewmodel import homing_order_note
+
+        marble = load_machine_config(load_profile("marble"))
+        self.assertEqual(homing_order_note(marble, "anything"), "")
+
+
+class TestDocumentedOrderMatchesTheDocs(unittest.TestCase):
+    """The UI holds the docs' claimed homing order as a constant rather than
+    parsing Turkish prose at runtime. That constant can drift from the docs, so
+    these tests read the actual files - the same principle applied to the INI
+    numbers elsewhere in this suite."""
+
+    def setUp(self):
+        from bettercnc.viewmodel import (
+            DOCUMENTED_HOME_ORDER,
+            DOCUMENTED_HOME_ORDER_SOURCES,
+        )
+
+        self.order = DOCUMENTED_HOME_ORDER
+        self.sources = DOCUMENTED_HOME_ORDER_SOURCES
+
+    def _read(self, rel):
+        import os
+
+        from helpers import REPO_ROOT
+
+        with open(os.path.join(REPO_ROOT, rel), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_every_cited_source_exists(self):
+        import os
+
+        from helpers import REPO_ROOT
+
+        for rel in self.sources:
+            with self.subTest(source=rel):
+                self.assertTrue(os.path.exists(os.path.join(REPO_ROOT, rel)))
+
+    def test_every_cited_source_states_that_order(self):
+        for rel in self.sources:
+            with self.subTest(source=rel):
+                self.assertIn(
+                    self.order, self._read(rel),
+                    "{} no longer says {!r} - the UI constant has drifted "
+                    "from the docs".format(rel, self.order),
+                )
+
+    def test_no_cited_source_still_states_the_old_wrong_order(self):
+        """Guards the specific regression: the docs used to say Z -> X -> Y."""
+        for rel in self.sources:
+            with self.subTest(source=rel):
+                self.assertNotIn("Z → X → Y", self._read(rel))
+
+    def test_documented_order_matches_the_ini(self):
+        """The whole point: docs and config must agree, checked from both ends."""
+        ini = ini_raw_values()
+        seqs = [
+            (int(float(ini["JOINT_{}.HOME_SEQUENCE".format(j)])), a)
+            for j, a in ((0, "X"), (1, "Y"), (2, "Z"))
+        ]
+        self.assertEqual(" → ".join(a for _, a in sorted(seqs)), self.order)
 
 
 class TestSharedHomeAndLimitWarning(unittest.TestCase):
