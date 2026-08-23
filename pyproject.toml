@@ -1,0 +1,19 @@
+# Test-runner configuration.
+#
+# The suite is stdlib unittest and `make test` is the documented entry point —
+# the LinuxCNC live USB has no third-party Python packages and we do not want a
+# `pip install` between a bug and a diagnosis.
+#
+# This file exists so that IF a machine happens to have pytest, `pytest` also
+# works: every test here is a plain unittest.TestCase, which pytest collects
+# natively. It is a convenience, not a requirement.
+
+[tool.pytest.ini_options]
+testpaths = ["ui/tests", "scripts"]
+python_files = ["test_*.py"]
+pythonpath = ["ui", "ui/tests", "scripts"]
+addopts = "-q"
+
+[tool.bettercnc]
+# Where the UI reads machine numbers from. Nothing hardcodes them.
+test_rig_ini = "configs/test-rig/test-rig.ini"

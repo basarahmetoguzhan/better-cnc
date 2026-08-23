@@ -25,3 +25,6 @@ position*.txt
 # Other .claude/ content (agents, commands) can be committed deliberately.
 .claude/settings.json
 .claude/settings.local.json
+
+# Python bytecode from the UI package
+ui/**/__pycache__/
