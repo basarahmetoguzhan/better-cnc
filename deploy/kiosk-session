@@ -1,0 +1,121 @@
+#!/bin/bash
+# The program cage runs on the kiosk (deploy/files/bettercnc-kiosk.service.in).
+# It does not return on its own; cage, and with it the session, ends when it
+# does, and systemd starts the whole thing again.
+#
+#   1. the boot screen, bettercnc.bootpage on 127.0.0.1:BOOT_PORT. It never
+#      touches LinuxCNC, so it outlives every LinuxCNC run and the screen
+#      always says something true: starting, or why LinuxCNC stopped.
+#   2. the browser (deploy/kiosk-browser) on the boot screen, under
+#      bettercnc.browserwatch: restarted when it closes, and when its page
+#      stops asking both servers (a crashed tab). The boot screen hands over
+#      to the UI once it answers; the UI hands back when it stops answering
+#      (app.js).
+#   3. LinuxCNC on the kiosk INI (deploy/make_kiosk_ini.py), in a loop. Its
+#      display program, deploy/bettercnc-display, runs the UI. When LinuxCNC
+#      stops, the reason goes on the boot screen and it starts again.
+#
+# Environment (the service sets the first two):
+#   BETTERCNC_INI        the machine's INI   (configs/test-rig/test-rig.ini)
+#   BETTERCNC_PROFILE    the UI profile      (test-rig)
+#   BETTERCNC_UI_PORT    UI port             (8080)
+#   BETTERCNC_BOOT_PORT  boot screen port    (8079)
+#   BETTERCNC_RESTART_S  pause before a LinuxCNC restart (5)
+#   BETTERCNC_LOST_EXIT_S  the UI exits when LinuxCNC is half up this long (3)
+# Why these values: deploy/README.md, "Süreler".
+set -u
+
+DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$DEPLOY_DIR")"
+BASE_INI="${BETTERCNC_INI:-$REPO/configs/test-rig/test-rig.ini}"
+BOOT_PORT="${BETTERCNC_BOOT_PORT:-8079}"
+RESTART_S="${BETTERCNC_RESTART_S:-5}"
+export BETTERCNC_PROFILE="${BETTERCNC_PROFILE:-test-rig}"
+export BETTERCNC_UI_PORT="${BETTERCNC_UI_PORT:-8080}"
+export BETTERCNC_BOOT_URL="http://127.0.0.1:$BOOT_PORT/"
+export PYTHONPATH="$REPO/ui${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+
+# XDG_RUNTIME_DIR comes from the PAM session (pam_systemd); /tmp is a fallback.
+RUN="${XDG_RUNTIME_DIR:-/tmp}/bettercnc"
+mkdir -p "$RUN"
+STATUS="$RUN/status.txt"
+LOG="$RUN/linuxcnc.log"
+# The UI writes why it exited here (app.py --exit-reason-file).
+export BETTERCNC_EXIT_REASON_FILE="$RUN/ui-exit.txt"
+export BETTERCNC_LOST_EXIT_S="${BETTERCNC_LOST_EXIT_S:-3}"
+
+say() {
+  printf '%s\n' "$1" > "$STATUS.tmp" && mv -f "$STATUS.tmp" "$STATUS"
+  printf 'kiosk: %s\n' "$1" | head -n 1 >&2
+}
+
+children=()
+LCNC_PID=""
+stop() {
+  [ -n "$LCNC_PID" ] && kill "$LCNC_PID" 2>/dev/null
+  kill "${children[@]}" 2>/dev/null
+  wait
+  exit 0
+}
+trap stop TERM INT HUP
+
+say "Başlatılıyor…"
+# Restarted if it ever dies: without it the browser would sit on Chromium's
+# own "can't connect" page - the browser showing through.
+(
+  while true; do
+    python3 -m bettercnc.bootpage --port "$BOOT_PORT" --status-file "$STATUS" \
+      --ui-url "http://127.0.0.1:$BETTERCNC_UI_PORT/"
+    echo "kiosk: başlatma ekranı sunucusu durdu — yeniden başlatılıyor" >&2
+    sleep 1
+  done
+) &
+children+=("$!")
+
+python3 -m bettercnc.browserwatch \
+  --ui-health "http://127.0.0.1:$BETTERCNC_UI_PORT/healthz" \
+  --boot-health "http://127.0.0.1:$BOOT_PORT/healthz" \
+  -- "$DEPLOY_DIR/kiosk-browser" "$BETTERCNC_BOOT_URL" &
+children+=("$!")
+
+n=0
+while true; do
+  n=$((n + 1))
+  if ! KIOSK_INI="$(python3 "$DEPLOY_DIR/make_kiosk_ini.py" "$BASE_INI" 2>"$RUN/ini.err")"; then
+    say "Makinenin ayar dosyası okunamadı — bakım gerekiyor. 10 s sonra yeniden denenecek.
+
+Bakım için ($BASE_INI):
+$(tail -n 5 "$RUN/ini.err")"
+    sleep 10 &
+    wait $!
+    continue
+  fi
+  rm -f "$BETTERCNC_EXIT_REASON_FILE"
+  say "Makinenin kontrol sistemi başlatılıyor… (deneme $n)"
+  # No X DISPLAY and no tty, on purpose (reference/linuxcnc/scripts/linuxcnc.in):
+  # with DISPLAY set and no tty the script opens Tk windows over the kiosk
+  # and waits for a click - "LinuxCNC terminated with an error" (:231-256,
+  # seen in sim/ on 2026-10-20 after the UI was killed) and "LinuxCNC is
+  # still running. Restart it?" for a lock file left by a crash (:743-755) -
+  # and with a tty it waits for typed answers (the service's stdin is tty1).
+  # Without both it writes errors to ~/linuxcnc_*.txt, which the boot screen
+  # shows, and clears a stale lock itself. The UI needs neither.
+  env -u DISPLAY linuxcnc "$KIOSK_INI" < /dev/null > "$LOG" 2>&1 &
+  LCNC_PID=$!
+  wait "$LCNC_PID"
+  code=$?
+  LCNC_PID=""
+  why=""
+  if [ -s "$BETTERCNC_EXIT_REASON_FILE" ]; then
+    why=": $(head -n 1 "$BETTERCNC_EXIT_REASON_FILE")"
+  fi
+  say "Makinenin kontrol sistemi durdu${why}.
+${RESTART_S} s sonra kendiliğinden yeniden başlatılıyor; makine acil stopta ve referanssız açılacak.
+
+Bakım için (LinuxCNC çıkış kodu $code, $LOG):
+$(tail -n 12 "$LOG" 2>/dev/null)
+$(grep -v '^Can not find' "$HOME/linuxcnc_debug.txt" 2>/dev/null | tail -n 8)"
+  sleep "$RESTART_S" &
+  wait $!
+done

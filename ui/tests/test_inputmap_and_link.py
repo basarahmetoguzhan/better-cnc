@@ -6,19 +6,26 @@ Link health (packet loss + watchdog) was absent from the prototype entirely.
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from helpers import ALL_SCREENS, all_html, html, session, view
 
+from bettercnc import render as R
+from bettercnc import viewmodel as VM
+from bettercnc.capabilities import Capability
 from bettercnc.profiles import TEST_RIG_INPUTS, load_profile
-from bettercnc.state import LinkHealth
+from bettercnc.state import LinkHealth, Severity
 
-#: docs/DURUM.md:73-80. Hand-verified by triggering each switch.
+#: docs/DURUM.md:73-80 (locations, hand-verified by triggering each switch) and
+#: docs/DURUM.md:82 (jog directions: X+ = right, Z+ = up, Y unknown). Y's ends are
+#: "" because its DIR fault hides which way is +; asserting "+"/"-" there would be
+#: presenting a guess as a measurement.
 EXPECTED_MAP = {
     "gpio.020": ("X", "+"),   # X sağ
     "gpio.021": ("X", "-"),   # X sol
-    "gpio.022": ("Y", "+"),   # Y arka
-    "gpio.023": ("Y", "-"),   # Y ön
+    "gpio.022": ("Y", ""),    # Y arka - + end unknown
+    "gpio.023": ("Y", ""),    # Y ön   - + end unknown
     "gpio.024": ("Z", "+"),   # Z üst
 }
 
@@ -42,6 +49,16 @@ class TestInputMap(unittest.TestCase):
                 self.assertEqual(inp.axis, axis)
                 self.assertEqual(inp.end, end)
 
+    def test_y_end_is_unknown_not_guessed(self):
+        """Regression guard: the map once said Y rear = "+", Y front = "-" while
+        docs/DURUM.md:82 says "Y = belirsiz". Unknown stays unknown until the Y
+        DIR fault is fixed and Y+ is jogged (docs/DURUM.md:127)."""
+        for inp in self.profile.inputs_for_axis("Y"):
+            with self.subTest(pin=inp.pin):
+                self.assertEqual(inp.end, "")
+                self.assertIn("DURUM.md:", inp.source)
+                self.assertIn(":82", inp.source)
+
     def test_each_input_cites_its_source(self):
         for inp in self.profile.inputs:
             with self.subTest(pin=inp.pin):
@@ -54,6 +71,29 @@ class TestInputMap(unittest.TestCase):
 
     def test_z_has_only_one_switch(self):
         self.assertEqual(len(self.profile.inputs_for_axis("Z")), 1)
+
+
+class TestUnmeasuredClaimsStayHedged(unittest.TestCase):
+    """Guards for the 2026-10-18 corrections: none of these may silently revert."""
+
+    def test_y_dir_fault_location_is_not_claimed(self):
+        """Where Y's DIR path fails (board terminal, cable or driver) has not been
+        measured (docs/DURUM.md:12), so no screen may call it a cable fault."""
+        self.assertNotIn("DIR kablosu", all_html("test-rig"))
+        self.assertIn("ölçülmedi", html("test-rig", "alarmlar"))
+
+    def test_estop_requirement_keeps_the_encoder_front_end_caveat(self):
+        """IO 25-33 are GPIO with num_encoders=0, but the circuit behind the
+        encoder terminals is unverified (OPEN-QUESTIONS B2)."""
+        req = load_profile("test-rig").capability(Capability.ESTOP_INPUT).requirement
+        self.assertIn("ohmmetre", req)
+        self.assertIn("OPEN-QUESTIONS B2", req)
+        self.assertIn("ohmmetre", html("test-rig", "makine"))
+
+    def test_marble_subtitle_does_not_reuse_plan_phase_numbers(self):
+        """The marble machine was "Faz 2" in the original plan, which collides
+        with the test-rig phase numbers. docs/DURUM.md:177 renamed it."""
+        self.assertNotIn("Faz 2", all_html("marble"))
 
 
 class TestZAsymmetry(unittest.TestCase):
@@ -190,22 +230,42 @@ class TestLinkHealth(unittest.TestCase):
         self.rows = {r["label"]: r for r in self.vm["link"]["rows"]}
 
     def test_packet_error_total_is_present(self):
-        self.assertIn("Paket kaybı", self.rows)
+        self.assertIn("Kayıp paket", self.rows)
 
     def test_watchdog_is_present(self):
-        self.assertIn("Watchdog", self.rows)
+        self.assertIn("Kart bağlantısı", self.rows)
 
     def test_io_error_is_present(self):
-        self.assertIn("io_error", self.rows)
+        self.assertIn("İletişim hatası", self.rows)
 
     def test_hal_pin_names_are_shown(self):
+        """The operator reads plain labels; the HAL names stay on the rows
+        for maintenance."""
         self.assertEqual(
-            self.rows["Paket kaybı"]["hal"], "hm2_7i92.0.packet-error-total"
+            self.rows["Kayıp paket"]["hal"], "hm2_7i92.0.packet-error-total"
         )
         self.assertEqual(
-            self.rows["Watchdog"]["hal"], "hm2_7i92.0.watchdog.has_bit"
+            self.rows["Kart bağlantısı"]["hal"], "hm2_7i92.0.watchdog.has_bit"
         )
-        self.assertEqual(self.rows["io_error"]["hal"], "hm2_7i92.0.io_error")
+        self.assertEqual(self.rows["İletişim hatası"]["hal"], "hm2_7i92.0.io_error")
+
+    def test_no_driver_jargon_reaches_the_operator(self):
+        """2026-10-20: "a worker does not know what 'watchdog bit' means".
+        Labels, values and problems say what happened and what to do."""
+        _, config, adapter = session("test-rig")
+        state = adapter.snapshot()
+        for link in (
+            LinkHealth(True, 3, True, True, 1.0),
+            LinkHealth(True, None, None, None, 1.0),
+            LinkHealth(False, None, None, None, None),
+        ):
+            panel = VM.link_panel(state._replace(link=link), config)
+            words = " ".join(
+                [r["label"] + " " + r["value"] for r in panel["rows"]] + panel["problems"]
+            ).lower()
+            for jargon in ("watchdog", "ısır", "isir", "io_error", "has_bit", "sessiz"):
+                with self.subTest(link=link, word=jargon):
+                    self.assertNotIn(jargon, words)
 
     def test_hal_pin_names_reach_the_markup(self):
         markup = html("test-rig", "kontrol")
@@ -225,22 +285,55 @@ class TestLinkHealth(unittest.TestCase):
         _, _, adapter = session("test-rig")
         state = adapter.snapshot()._replace(link=link)
         panel = link_panel(state, load_machine_config(load_profile("test-rig")))
-        row = {r["label"]: r for r in panel["rows"]}["Paket kaybı"]
+        row = {r["label"]: r for r in panel["rows"]}["Kayıp paket"]
         self.assertEqual(row["value"], "7")
         self.assertEqual(row["severity"], "error")
+
+    LOST = (
+        "Kartla bağlantı koptu — makine durduruldu. Ethernet kablosunu ve "
+        "kartın beslemesini kontrol edin, sonra «Yazılım sıfırla»ya basın. "
+        "Ardından referansı yeniden alın."
+    )
 
     def test_bitten_watchdog_is_an_error(self):
         link = LinkHealth(True, 0, True, False, 1.0)
         self.assertFalse(link.healthy)
-        self.assertTrue(any("Watchdog" in p for p in link.problems))
+        self.assertEqual(link.problems, [self.LOST])
 
     def test_io_error_is_an_error(self):
         link = LinkHealth(True, 0, False, True, 1.0)
         self.assertFalse(link.healthy)
-        self.assertTrue(any("io_error" in p for p in link.problems))
+        self.assertEqual(link.problems, [self.LOST])
+
+    def test_both_faults_are_one_problem_with_one_remedy(self):
+        """io_error stops the watchdog's petting, so it bites too; the
+        operator does one thing about both."""
+        self.assertEqual(LinkHealth(True, 0, True, True, 1.0).problems, [self.LOST])
 
     def test_healthy_link_reports_healthy(self):
         self.assertTrue(LinkHealth(True, 0, False, False, 1.0).healthy)
+
+    def test_packet_loss_alone_makes_the_link_unhealthy(self):
+        """Round-1 mutant T06: every other unhealthy case also had the
+        watchdog or io_error set, so dropping the packet-error term from
+        LinkHealth.healthy went unnoticed. Counted packet loss on an otherwise
+        clean link must still raise the header severity to WARN."""
+        lossy = LinkHealth(True, 3, False, False, 1.0)
+        self.assertFalse(lossy.healthy)
+        self.assertEqual(
+            lossy.problems,
+            [
+                "Kartla iletişimde 3 paket kayboldu. Sayı artmaya devam ederse "
+                "Ethernet kablosunu ve bağlantısını kontrol edin."
+            ],
+        )
+        _, _, adapter = session("test-rig")
+        adapter.software_estop_reset()
+        adapter.home_all()
+        ready = adapter.snapshot()
+        self.assertTrue(ready.link.healthy)  # premise: the mock's link is clean
+        self.assertEqual(ready.status_severity, Severity.INFO)
+        self.assertEqual(ready._replace(link=lossy).status_severity, Severity.WARN)
 
     def test_disconnected_blocks_program_start(self):
         _, _, adapter = session("test-rig")
@@ -252,18 +345,101 @@ class TestLinkHealth(unittest.TestCase):
         self.assertIn("bağlantı yok", " ".join(state.start_blocks))
 
     def test_unknown_counters_render_as_dashes_not_zero(self):
-        """A pin we could not read is not the same as a pin reading zero."""
-        from bettercnc.viewmodel import link_panel
-        from bettercnc.configmodel import load_machine_config
-
+        """A pin we could not read is not the same as a pin reading zero, and
+        its row is WARN: neither the ERROR of a fault nor the INFO of a clean
+        reading."""
         link = LinkHealth(True, None, None, None, 1.0)
-        _, _, adapter = session("test-rig")
+        profile, config, adapter = session("test-rig")
         state = adapter.snapshot()._replace(link=link)
-        panel = link_panel(state, load_machine_config(load_profile("test-rig")))
-        rows = {r["label"]: r["value"] for r in panel["rows"]}
-        self.assertEqual(rows["Paket kaybı"], "—")
-        self.assertEqual(rows["Watchdog"], "—")
-        self.assertEqual(rows["io_error"], "—")
+        panel = VM.link_panel(state, config)
+        rows = {r["label"]: (r["value"], r["severity"]) for r in panel["rows"]}
+        for label in ("Kayıp paket", "Kart bağlantısı", "İletişim hatası"):
+            with self.subTest(row=label):
+                self.assertEqual(rows[label], ("—", "warn"))
+        self.assertFalse(panel["healthy"])
+
+    def test_any_unreadable_counter_makes_the_link_not_healthy(self):
+        """LinkHealth.healthy: an unread counter is unknown, not clean.
+        Calling such a link healthy would present an unmeasured value as
+        measured. Each counter alone, against a clean link."""
+        clean = LinkHealth(True, 0, False, False, 1.0)
+        self.assertTrue(clean.healthy)  # premise
+        for field, name in (
+            ("packet_error_total", "kayıp paket sayısı"),
+            ("watchdog_has_bit", "kart bağlantısı"),
+            ("io_error", "iletişim hatası"),
+        ):
+            with self.subTest(field=field):
+                link = clean._replace(**{field: None})
+                self.assertFalse(link.healthy)
+                self.assertEqual(link.unreadable, [name])
+                self.assertEqual(
+                    link.problems,
+                    ["Okunamayan gösterge: {} — kartla iletişimin sağlığı bilinmiyor.".format(name)],
+                )
+        self.assertEqual(
+            LinkHealth(True, None, None, None, 1.0).problems,
+            [
+                "Okunamayan gösterge: kayıp paket sayısı, kart bağlantısı, iletişim hatası — "
+                "kartla iletişimin sağlığı bilinmiyor."
+            ],
+        )
+
+    def test_lost_connection_is_named_once(self):
+        """Without a connection every counter is unreadable; the one reason
+        is the connection, so the unreadable line is not added to it."""
+        self.assertFalse(LinkHealth(False, 0, False, False, 1.0).healthy)
+        lost = LinkHealth(False, None, None, None, None)
+        self.assertFalse(lost.healthy)
+        self.assertEqual(
+            lost.problems, ["Kart bağlantısının durumu okunamıyor — kartla iletişim bilinmiyor."]
+        )
+
+    def test_unreadable_counter_warns_in_the_header_and_on_the_makine_card(self):
+        profile, config, adapter = session("test-rig")
+        adapter.software_estop_reset()
+        adapter.home_all()
+        ready = adapter.snapshot()
+        ready_markup = R.render_body(VM.build(profile, config, ready, "makine"))
+        # Premise: a clean link on a ready machine reads INFO and "sağlıklı".
+        self.assertEqual(ready.status_severity, Severity.INFO)
+        self.assertIn("Bağlantı sağlıklı.", ready_markup)
+
+        part = ready._replace(link=ready.link._replace(watchdog_has_bit=None))
+        self.assertEqual(part.status_severity, Severity.WARN)
+        vm = VM.build(profile, config, part, "makine")
+        self.assertFalse(vm["makine"]["link_healthy"])
+        markup = R.render_body(vm)
+        self.assertIn('class="state" data-severity="warn"', markup)
+        self.assertIn(
+            "Okunamayan gösterge: kart bağlantısı — kartla iletişimin sağlığı bilinmiyor.", markup
+        )
+        self.assertNotIn("Bağlantı sağlıklı.", markup)
+        gate = VM.build(profile, config, part, "kontrol")["kontrol"]["gate"]
+        self.assertIn(
+            "Okunamayan gösterge: kart bağlantısı — kartla iletişimin sağlığı bilinmiyor.",
+            gate["warnings"],
+        )
+
+    def test_unknown_servo_period_is_a_dash_in_warn(self):
+        """LinkHealth.servo_period_ms is None when the INI gives no
+        [EMCMOT]SERVO_PERIOD. The header shows "—", never a default."""
+        profile, config, adapter = session("test-rig")
+        base = adapter.snapshot()
+
+        def servo(link):
+            vm = VM.build(profile, config, base._replace(link=link), "kontrol")
+            row = {r["label"]: r for r in vm["link"]["rows"]}["Servo döngü"]
+            shown = re.search(
+                r'data-link="Servo döngü"[^>]*>.*?<span class="link-v"[^>]*>([^<]*)</span>',
+                R.render_header(vm),
+            )
+            return row["value"], row["severity"], shown.group(1)
+
+        self.assertEqual(
+            servo(LinkHealth(True, 0, False, False, 0.5)), ("0.5 ms", "info", "0.5 ms")
+        )
+        self.assertEqual(servo(LinkHealth(True, 0, False, False, None)), ("—", "warn", "—"))
 
     def test_link_row_appears_on_every_screen(self):
         """Header is global, so these indicators are always in view."""

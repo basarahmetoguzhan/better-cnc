@@ -188,8 +188,8 @@ exits 2 with install guidance if absent.
 | Minimum board, if a Pi | **Raspberry Pi 4** (Pi 3 ruled out) | **Settled by source** + [DURUM.md:110](DURUM.md) |
 | Image type | Full SD-card image via Raspberry Pi Imager | **Settled by source** |
 | Pi 4 vs Pi 5 image | Separate images — match your hardware | **Settled by source** |
-| Debian base | Bookworm **or** Trixie | **Not settled** — check after flashing |
-| LinuxCNC version | tree says 2.9.10, docs say 2.9.8 | **Not settled** — check linuxcnc.org |
+| Debian base | amd64 live USB: **Trixie (13)**; Pi image: Bookworm **or** Trixie | amd64 **VERIFIED** ([DURUM.md:22](DURUM.md), kernel `deb13`); Pi **not settled** — check after flashing |
+| LinuxCNC version | **2.9.10** running (live USB); tree says 2.9.10, tree docs say 2.9.8 | Running version **VERIFIED** ([DURUM.md:21](DURUM.md)); Pi image / current download **not settled** — check linuxcnc.org |
 | Image checksum | listed values are stale | **Not settled** — use the published checksum |
 
 ---
@@ -419,6 +419,8 @@ The board's address determines the Pi's. Documented options, both from
 
 **The Zhulong's factory address is UNVERIFIED** — see
 [04-zhulong-board-hardware.md](04-zhulong-board-hardware.md) Q3.
+(2026-10-18: the board answers on `10.10.10.10`, with the PC on `10.10.10.1/24`
+([DURUM.md:25-26](DURUM.md)). Whether that is its factory default is not recorded.)
 
 The man page warns specifically about the first option:
 
@@ -436,6 +438,9 @@ ip -brief address show
 ```
 
 Gone on reboot. Correct for bring-up — do not commit to a scheme before Q3 is answered.
+(2026-10-18: the `10.10.10.x` scheme is in use. On the live USB this temporary form, with
+`enp3s0` in place of `eth0`, is the per-boot step when persistence does not keep the
+address — [DURUM.md:29-33](DURUM.md).)
 
 #### Persistent — NetworkManager
 
@@ -597,6 +602,10 @@ hm2/hm2_7i96.0: StepGen: 6
 hm2/hm2_7i96.0:     clock_frequency: 33333333 Hz (33.33 MHz)
 ```
 
+(2026-10-18: example written for a 7i96. On our board the prefix is `hm2_7i92.0`, and the
+IDROM gives the StepGen clock as 100 MHz — `readhmid:68`. No dmesg capture of this line
+has been saved to `docs/board-dumps/` yet.)
+
 **Record that number in `docs/board-dumps/` and in
 [04-zhulong-board-hardware.md](04-zhulong-board-hardware.md)'s resolution log.**
 
@@ -647,6 +656,12 @@ procedure, is in
 
 Given that the Zhulong carries a **50.000 MHz crystal** (OBSERVED) while the stock 7i96
 IDROM declares 33 MHz / 200 MHz, this is not a hypothetical concern for us.
+
+(2026-10-18: superseded. The IDROM reports ClockLow 100 MHz / ClockHigh 200 MHz
+(`readhmid:17-18`). The 50 MHz crystal is the PLL reference, not evidence of a
+misdeclared clock ([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)). What remains
+is only that the IDROM is self-reported; the scope check is still pending, low priority
+([OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B5).)
 
 ---
 

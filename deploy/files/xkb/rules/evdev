@@ -1,0 +1,9 @@
+// deploy/files/xkb: the kiosk's keyboard rules. The system's evdev rules,
+// unchanged, plus one option, bettercnc:kiosk (symbols/bettercnc). The kiosk
+// service points libxkbcommon here with XKB_CONFIG_EXTRA_PATH, which is
+// searched before the system tree, so only the kiosk session sees this file.
+
+! include %S/evdev
+
+! option                =   symbols
+  bettercnc:kiosk       =   +bettercnc(kiosk)

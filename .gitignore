@@ -28,3 +28,8 @@ position*.txt
 
 # Python bytecode from the UI package
 ui/**/__pycache__/
+
+# deploy/: the machine's address (deploy/machine.sh) and the kiosk INIs that
+# deploy/make_kiosk_ini.py rewrites on every kiosk start.
+deploy/machine.local
+configs/**/*-kiosk.ini

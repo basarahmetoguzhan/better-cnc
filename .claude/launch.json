@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-kiosk-mock",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PYTHONPATH=ui", "python3", "-m", "bettercnc.app", "--profile", "test-rig",
+                      "--port", "8790", "--boot-url", "http://127.0.0.1:8079/"],
+      "port": 8790
+    }
+  ]
+}

@@ -208,6 +208,33 @@ class TestLatencyIsUnmeasured(unittest.TestCase):
         )
 
 
+class TestServoPeriodWithoutAnIni(unittest.TestCase):
+    """The marble machine has no INI yet, so nothing gives its servo period.
+    Its platform record used to carry an uncited 1.0, and the link card fell
+    back to it: "1 ms" in the header of a machine with no config. The servo
+    period is [EMCMOT]SERVO_PERIOD (configmodel.MachineConfig.servo_period_ms);
+    without one the screens say "—"."""
+
+    def test_marble_link_card_shows_a_dash(self):
+        self.assertIsNone(load_profile("marble").ini_path)  # premise
+        for screen in ALL_SCREENS:
+            with self.subTest(screen=screen):
+                rows = {r["label"]: r for r in view("marble", screen)["link"]["rows"]}
+                self.assertEqual(
+                    (rows["Servo döngü"]["value"], rows["Servo döngü"]["severity"]),
+                    ("—", "warn"),
+                )
+
+    def test_no_millisecond_figure_appears_for_marble(self):
+        hits = re.findall(r"\d+(?:[.,]\d+)?\s*ms\b", all_html("marble"))
+        self.assertEqual(hits, [], "servo period without a source: {}".format(hits))
+        # Premise: the same pattern finds the test rig's INI value.
+        self.assertIn("1 ms", re.findall(r"\d+(?:[.,]\d+)?\s*ms\b", all_html("test-rig")))
+
+    def test_marble_platform_states_no_servo_period(self):
+        self.assertIsNone(load_profile("marble").platform.servo_period_ms)
+
+
 class TestOtherAbsentData(unittest.TestCase):
     """Things the prototype invented that have no source at all."""
 

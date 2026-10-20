@@ -10,10 +10,12 @@ was not measured.
 
 from __future__ import annotations
 
-from typing import Dict, List, NamedTuple, Optional
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional
 
 from .iniload import IniFile, load_ini
-from .profiles import MachineProfile
+
+if TYPE_CHECKING:  # annotations only: profiles derives its travel facts from here
+    from .profiles import MachineProfile
 
 #: What the UI shows in place of a value that was never measured.
 UNMEASURED = "ölçülmedi"
@@ -68,8 +70,12 @@ class AxisConfig(NamedTuple):
     dirsetup_ns: int
     dirhold_ns: int
     home_sequence: int
-    home_ignore_limits: bool
+    #: None when LinuxCNC could not read the value as a boolean
+    #: (IniValue.as_bool): unknown, never a silent False.
+    home_ignore_limits: Optional[bool]
     home_search_vel: float
+    #: The INI text behind home_ignore_limits, for a message that names it.
+    home_ignore_limits_raw: str = ""
 
     # -- display strings, so the renderer never formats hardware numbers itself
 
@@ -127,16 +133,15 @@ class MachineConfig(NamedTuple):
     servo_period_ms: Optional[float]
     #: Absent-config explanation, shown instead of numbers.
     absence_reason: str = ""
+    #: The feed override ceiling in whole percent (max_feed_override_pct);
+    #: None without an INI.
+    max_feed_override_pct: Optional[int] = None
 
     def axis(self, name: str) -> Optional[AxisConfig]:
         for a in self.axes:
             if a.axis == name:
                 return a
         return None
-
-    @property
-    def any_travel_measured(self) -> bool:
-        return any(a.travel.measured for a in self.axes)
 
     @property
     def soft_limits_configured(self) -> bool:
@@ -153,9 +158,39 @@ def _axis_order(ini: IniFile) -> List[str]:
     return [c for c in coords.raw.replace(" ", "").upper()]
 
 
+def max_feed_override_pct(ini: IniFile) -> int:
+    """[DISPLAY]MAX_FEED_OVERRIDE, "the maximum feed override the user may
+    select" (reference/linuxcnc/docs/src/config/ini-config.adoc:261), in
+    whole percent.
+
+    Read as axis.py reads it (axis.py:3353-3355): without the key, 100 %; an
+    unparsable value too, as the lowest ceiling is the safe reading. Rounded,
+    not truncated (int(x * 100 + 0.5)): 1.15 is 114.999... in binary and must
+    still give 115. LinuxCncAdapter clamps to it and the Kontrol screen
+    disables the feed chips above it, from this one function.
+    """
+    value = ini.get("DISPLAY", "MAX_FEED_OVERRIDE")
+    ceiling = None
+    if value is not None:
+        try:
+            ceiling = value.as_float()
+        except ValueError:
+            ceiling = None
+    return int((1.0 if ceiling is None else ceiling) * 100 + 0.5)
+
+
 def load_machine_config(profile: MachineProfile) -> MachineConfig:
     """Read the profile's INI. Returns an explicitly-absent config if there is none."""
-    if profile.ini_path is None:
+    return load_config_from_ini(profile.ini_path)
+
+
+def load_config_from_ini(ini_path: Optional[str]) -> MachineConfig:
+    """load_machine_config for a bare INI path.
+
+    profiles.py needs the config while it is still building the profile, to
+    derive the travel facts from the INI rather than restate them.
+    """
+    if ini_path is None:
         return MachineConfig(
             present=False,
             ini_path=None,
@@ -174,13 +209,17 @@ def load_machine_config(profile: MachineProfile) -> MachineConfig:
             ),
         )
 
-    ini = load_ini(profile.ini_path)
+    ini = load_ini(ini_path)
     axis_letters = _axis_order(ini)
     axes: List[AxisConfig] = []
 
     for jnum, letter in enumerate(axis_letters):
         sec = "JOINT_{}".format(jnum)
         if (sec, "SCALE") not in ini:
+            # No section: skip this letter, never end the scan or renumber.
+            # With trivkins joint n is the nth letter (see _axis_order), so a
+            # missing [JOINT_1] leaves Z as joint 2. Shifting it to joint 1
+            # would make a "Z" jog or homing chip drive LinuxCNC's joint 1.
             continue
         min_v = ini.get(sec, "MIN_LIMIT")
         max_v = ini.get(sec, "MAX_LIMIT")
@@ -202,6 +241,7 @@ def load_machine_config(profile: MachineProfile) -> MachineConfig:
                 else ""
             ),
         )
+        ignore_limits = ini.require(sec, "HOME_IGNORE_LIMITS")
         axes.append(
             AxisConfig(
                 axis=letter,
@@ -215,10 +255,9 @@ def load_machine_config(profile: MachineProfile) -> MachineConfig:
                 dirsetup_ns=ini.require(sec, "DIRSETUP").as_int(),
                 dirhold_ns=ini.require(sec, "DIRHOLD").as_int(),
                 home_sequence=ini.require(sec, "HOME_SEQUENCE").as_int(),
-                home_ignore_limits=(
-                    ini.require(sec, "HOME_IGNORE_LIMITS").raw.strip().upper() == "YES"
-                ),
+                home_ignore_limits=ignore_limits.as_bool(),
                 home_search_vel=ini.require(sec, "HOME_SEARCH_VEL").as_float(),
+                home_ignore_limits_raw=ignore_limits.raw,
             )
         )
 
@@ -238,7 +277,7 @@ def load_machine_config(profile: MachineProfile) -> MachineConfig:
 
     return MachineConfig(
         present=True,
-        ini_path=profile.ini_path,
+        ini_path=ini_path,
         axes=axes,
         timing=timing,
         kinematics=ini.get("KINS", "KINEMATICS").raw if ("KINS", "KINEMATICS") in ini else None,
@@ -252,6 +291,7 @@ def load_machine_config(profile: MachineProfile) -> MachineConfig:
             else None
         ),
         servo_period_ms=(servo.as_float() / 1e6) if servo else None,
+        max_feed_override_pct=max_feed_override_pct(ini),
     )
 
 

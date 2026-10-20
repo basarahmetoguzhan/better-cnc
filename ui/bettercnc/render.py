@@ -348,6 +348,14 @@ def render_dro(c: Dict[str, Any]) -> str:
     rows = []
     for a in c["axes"]:
         travel_cls = "ok" if a["travel_measured"] else "unmeasured"
+        # homed is None while LinuxCNC's status is unknown
+        # (viewmodel.control_screen): "ref yok" would claim a reading.
+        if a["homed"] is None:
+            hc, hs = MUTED, "—"
+        elif a["homed"]:
+            hc, hs = OK, "ref"
+        else:
+            hc, hs = WARN, "ref yok"
         rows.append(
             '<div class="dro-row" data-axis="{ax}">'
             '<span class="dro-ax">{ax}</span>'
@@ -362,8 +370,8 @@ def render_dro(c: Dict[str, Any]) -> str:
                 tc=travel_cls,
                 tm="1" if a["travel_measured"] else "0",
                 travel=e(a["travel"]),
-                hc=OK if a["homed"] else WARN,
-                hs="ref" if a["homed"] else "ref yok",
+                hc=hc,
+                hs=hs,
             )
         )
     head = (
@@ -387,7 +395,7 @@ def render_jog(c: Dict[str, Any]) -> str:
             label,
             "jog",
             c["can_jog"],
-            "" if c["can_jog"] else "Makine devre dışı",
+            "" if c["can_jog"] else c["jog_disabled_reason"],
             kind="jog",
             value="{}:{}".format(axis, direction),
         )
@@ -409,21 +417,31 @@ def render_jog(c: Dict[str, Any]) -> str:
     )
     feeds = "".join(
         button(
-            "{}%".format(f), "feed", True, value=str(f),
-            kind="chip" + (" on" if f == c["feed_override"] else ""),
+            "{}%".format(f["pct"]), "feed", f["enabled"], f["reason"], value=str(f["pct"]),
+            kind="chip" + (" on" if f["pct"] == c["feed_override"] else ""),
         )
         for f in c["feed_overrides"]
+    )
+    # A disabled chip's reason is also written out: the title tooltip alone
+    # does not show on a touch screen.
+    feed_reasons = []
+    for f in c["feed_overrides"]:
+        if not f["enabled"] and f["reason"] not in feed_reasons:
+            feed_reasons.append(f["reason"])
+    feed_note = "".join(
+        '<div class="cap-reason">{}</div>'.format(e(r)) for r in feed_reasons
     )
     body = (
         '<div class="jog-wrap"><div class="jog-pad">{pad}</div>'
         '<div class="jog-z">{z}</div></div>'
         '<div class="row-label">Adım (mm)</div><div class="row">{steps}</div>'
-        '<div class="row-label">İlerleme oranı</div><div class="row">{feeds}</div>'.format(
-            pad=pad, z=zcol, steps=steps, feeds=feeds
-        )
+        '<div class="row-label">İlerleme oranı</div><div class="row">{feeds}</div>'
+        "{note}".format(pad=pad, z=zcol, steps=steps, feeds=feeds, note=feed_note)
     )
     if not c["can_jog"]:
-        body = banner("Jog devre dışı — makine kapalı.", "warn") + body
+        # The reason comes from the view model, which says "bilinmiyor" when the
+        # status could not be read - "makine kapalı" would be read off a placeholder.
+        body = banner(c["jog_disabled_reason"], "warn") + body
     return card("Jog", body)
 
 
@@ -778,10 +796,47 @@ def render_body(vm: Dict[str, Any]) -> str:
     )
 
 
-def render_page(vm: Dict[str, Any], css: str, js: str) -> str:
+def _script_json(value: Any) -> str:
+    """json.dumps for a value pasted inside <script>...</script>.
+
+    json.dumps leaves "<", ">" and "&" as they are, so a string holding
+    "</script>" would end the element early and turn the rest into live
+    markup, and "<!--" changes where the parser looks for the end (HTML
+    Standard, 4.12.1.3 "Restrictions for contents of script elements"). Each
+    is written as its \\u escape instead: the same string to JavaScript, and
+    JSON outside a string never contains them. U+2028/U+2029 are line
+    terminators that ECMAScript before ES2019 rejects inside a string literal
+    (the "JSON superset" change), so they are escaped as well. Other non-ASCII
+    text (Turkish) stays as UTF-8, which the page declares (meta charset).
+
+    Defence in depth: the only value inlined today is the screen name, which
+    app.py already restricts to VM.SCREENS on every route and on --dump.
+    """
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def render_page(
+    vm: Dict[str, Any], css: str, js: str, boot_url: Optional[str] = None
+) -> str:
+    """The whole page. window.__VM__ carries what app.js needs at load: the
+    screen, and in kiosk mode (app.py --boot-url) where to go when the UI
+    stops answering."""
+    client: Dict[str, Any] = {"screen": vm["screen"]}
+    if boot_url:
+        client["boot_url"] = boot_url
     return (
         "<!doctype html>\n"
-        '<html lang="tr"><head><meta charset="utf-8">'
+        # translate="no": in sim/ the kiosk's Chromium offered to translate
+        # the page into English (2026-10-20).
+        '<html lang="tr" translate="no"><head><meta charset="utf-8">'
+        '<meta name="google" content="notranslate">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         "<title>better-cnc · {title}</title>"
         "<style>{css}</style></head>"
@@ -791,7 +846,7 @@ def render_page(vm: Dict[str, Any], css: str, js: str) -> str:
             title=e(vm["profile"]["label"]),
             css=css,
             body=render_body(vm),
-            vmjson=json.dumps({"screen": vm["screen"]}),
+            vmjson=_script_json(client),
             js=js,
         )
     )

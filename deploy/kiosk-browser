@@ -1,0 +1,54 @@
+#!/bin/bash
+# The kiosk's browser: Chromium full screen, no tabs, no address bar, a fresh
+# profile on every start (no "restore pages?" bubble, no history). The
+# lockdown itself - only 127.0.0.1:8079/8080, no devtools, no printing, no
+# downloads - is Chromium policy, deploy/files/chromium-policy.json, installed
+# by deploy/kiosk.sh.
+#
+#   kiosk-browser URL
+#
+# BETTERCNC_BROWSER_FLAGS adds flags (sim/ passes --no-sandbox: Docker has no
+# user namespaces for Chromium's sandbox; never on the machine).
+set -u
+URL="${1:?usage: kiosk-browser URL}"
+
+BROWSER="$(command -v chromium || command -v chromium-browser || true)"
+if [ -z "$BROWSER" ]; then
+  echo "kiosk-browser: chromium yok (deploy/kiosk.sh install kurar)" >&2
+  exit 1
+fi
+
+# The DevTools pipe, when bettercnc.browserwatch starts us
+# (BETTERCNC_CDP_FDS="IN OUT", both >= 20): Chromium reads its commands on
+# fd 3 and writes on fd 4 for --remote-debugging-pipe. Only the watch holds
+# the other ends; there is no network port.
+pipe=()
+if [ -n "${BETTERCNC_CDP_FDS:-}" ]; then
+  read -r cdp_in cdp_out <<< "$BETTERCNC_CDP_FDS"
+  exec 3<&"$cdp_in" 4>&"$cdp_out" {cdp_in}<&- {cdp_out}>&-
+  unset BETTERCNC_CDP_FDS
+  pipe=(--remote-debugging-pipe)
+fi
+
+DATA="${XDG_RUNTIME_DIR:-/tmp}/bettercnc/chromium"
+rm -rf "$DATA"
+mkdir -p "$DATA"
+
+# shellcheck disable=SC2086  # BETTERCNC_BROWSER_FLAGS is a list of flags
+exec "$BROWSER" \
+  --kiosk \
+  --ozone-platform=wayland \
+  --user-data-dir="$DATA" \
+  --no-first-run \
+  --no-default-browser-check \
+  --noerrdialogs \
+  --disable-session-crashed-bubble \
+  --disable-infobars \
+  --disable-features=Translate,TranslateUI \
+  --lang=tr \
+  --overscroll-history-navigation=0 \
+  --disable-pinch \
+  --password-store=basic \
+  ${pipe[@]+"${pipe[@]}"} \
+  ${BETTERCNC_BROWSER_FLAGS:-} \
+  "$URL"

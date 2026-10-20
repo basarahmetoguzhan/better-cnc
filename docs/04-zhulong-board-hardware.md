@@ -1,8 +1,18 @@
 # 04 — Zhulong V2.0 Board Hardware
 
 Physical description of **our actual board**, assembled from high-resolution
-photographs. This is the document to wire from — once the open questions at the
-bottom are closed.
+photographs.
+
+> **⚠ Status, 2026-10-18 — partly superseded; the body is kept as history.** The board
+> is a **Mesa 7i92 derivative** (`hm2_7i92.0`, 2 × 17 = 34 IO, ClockLow 100 MHz), not a
+> 7i96 (`board-dumps/readhmid-10.10.10.10-2026-08-05.txt`). **Wire from
+> [10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)** and
+> [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md) (vendor diagram), not
+> from this file. The connector and component observations from photographs still
+> stand, and the IO-numbering hypothesis is CONFIRMED. The I/O budget below assumed 51
+> pins and is wrong. The 50 MHz crystal worry was a red herring — the crystal is the PLL
+> reference (docs/10). In the HAL pin names below, read `hm2_7i96.0` as `hm2_7i92.0`. The
+> resolution log at the bottom shows what has closed.
 
 Silkscreen reads **烛龙 V2.0** ("Zhúlóng", the torch-dragon of Chinese myth) alongside a
 LinuxCNC logo.
@@ -23,7 +33,9 @@ is the procedure for resolving what is still unknown here.
 
 **We have no vendor documentation of any kind.** No schematic, no manual, no pinout, no
 bitfile source. Every INFERRED and UNVERIFIED item below is a question for
-`mesaflash --readhmid` or for a multimeter.
+`mesaflash --readhmid` or for a multimeter. (2026-10-18: superseded in part — the
+vendor's annotated board diagram (2026-08-03) is transcribed in
+[08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md).)
 
 ---
 
@@ -74,19 +86,19 @@ is approximate.
 | 4 | `AXIS 3` | 4 | top | Step/dir output, channel 3 | **INFERRED** |
 | 5 | `AXIS 4` | 4 | top | Step/dir output, channel 4 | **INFERRED** |
 | 6 | `AXIS 5` | 4 | top | Step/dir output, channel 5 | **INFERRED** |
-| — | *(terminal meaning within each AXIS block)* | — | — | `STEP+ STEP− DIR+ DIR−` **or** `STEP DIR GND 5V` | **UNVERIFIED** — see Q1 |
+| — | *(terminal meaning within each AXIS block)* | — | — | `STEP+ STEP− DIR+ DIR−` **or** `STEP DIR GND 5V` | **CLOSED** (2026-08-03): `GND STEP DIR 5V`, single-ended — vendor diagram, [08](08-zhulong-pinout-confirmed.md), B3 |
 | 7 | `0-10V` + `CW` | 4 (shared block) | top | Analog spindle speed + run/direction | **INFERRED** |
 | — | *(the other 2 terminals of that block)* | — | — | Likely a ground/common and a second signal | **UNVERIFIED** |
 | 8 | `OUT 1` | 2 | top | Digital output 1 | **INFERRED** |
 | 9 | `OUT 2` | 2 | top | Digital output 2 | **INFERRED** |
-| — | *(output type: SSR / relay / opto / open-collector)* | — | — | unknown | **UNVERIFIED** |
-| 10 | `20 21 22 23 24 G 5V` | 7 (one block) | bottom | 5 digital inputs + common + 5 V supply | **INFERRED** — see the numbering hypothesis below |
+| — | *(output type: SSR / relay / opto / open-collector)* | — | — | NMOS, 24 V / 50 W; no SSR module in the firmware. Needs the second isolated 24 V supply (B7) | per vendor diagram ([08](08-zhulong-pinout-confirmed.md)) — not measured (2026-10-18) |
+| 10 | `20 21 22 23 24 G 5V` | 7 (one block) | bottom | 5 digital inputs + common + 5 V supply | **CONFIRMED** (vendor diagram 2026-08-03, dumps 2026-08-05; status tag added 2026-10-18) — labels are global IO numbers ([08](08-zhulong-pinout-confirmed.md), [10](10-7i92-pinout-verified.md)) |
 | 11 | `Encoder 0` | ? | bottom | Quadrature encoder channel 0 | **INFERRED** |
 | 12 | `Encoder 1` | ? | bottom | Quadrature encoder channel 1 | **INFERRED** |
 | 13 | `Encoder 2` | ? | bottom | Quadrature encoder channel 2 | **INFERRED** |
-| — | *(terminal count per encoder block)* | — | — | not legible in the photographs; A/B/Z + power expected | **UNVERIFIED** |
-| 14 | `24V GND` | 2 | right | Main power input | **OBSERVED** (silkscreen) |
-| 15 | `24V GND` | 2 | right | Second power terminal — parallel feed or pass-through | **INFERRED** |
+| — | *(terminal count per encoder block)* | — | — | not legible in the photographs; A/B/Z + power expected | **UNVERIFIED** — per vendor diagram: 5, `A B Z GND 5V` ([08](08-zhulong-pinout-confirmed.md)); front-end unverified (2026-10-18) |
+| 14 | `24V GND` | 2 | right | Main power input | **OBSERVED** (silkscreen) — but both terminals carry the same `24V GND` label; the main one sits next to the `470 16V` capacitor and `150` inductor (2026-10-18, [08](08-zhulong-pinout-confirmed.md)) |
+| 15 | `24V GND` | 2 | right | Second power terminal — parallel feed or pass-through | **INFERRED — wrong** (2026-10-18 note): per the vendor diagram it is the *isolated* external-device 24 V for OUT 1 / OUT 2 / 0-10V; never feed it from the main supply or join the GNDs ([08](08-zhulong-pinout-confirmed.md), B7) |
 | 16 | `Smart Serial 1` | RJ45 | left, top | RS-422 Smart Serial port 1 | **OBSERVED** (silkscreen) |
 | 17 | `Smart Serial 0` | RJ45 | left, middle | RS-422 Smart Serial port 0 | **OBSERVED** (silkscreen) |
 | 18 | *(unlabelled)* | RJ45 | left, bottom | **Ethernet** — has link/activity LEDs in the jack | **OBSERVED** |
@@ -96,7 +108,9 @@ is approximate.
 **There is no DB25 / P1 connector.** OBSERVED. On a stock 7i96 that connector carries
 17 GPIO pins at IO 34–50. On this board they are not brought out anywhere. This is the
 single largest physical difference from the stock design and is a major input to the
-geometry question (Q5).
+geometry question (Q5). (2026-10-18: moot — the board is a 7i92 with 2 × 17 = 34 IO, so
+IO 34–50 do not exist; in the 7i92 driver `P1` names IO 17–33, which *are* brought out to
+the CW / OUT / input / encoder terminals — [10](10-7i92-pinout-verified.md).)
 
 ---
 
@@ -130,6 +144,12 @@ whatever the IDROM reports, not the crystal — but if the dump shows something 
 (`steplen`, `stepspace`, `dirsetup`, `dirhold`) is scaled by ClockLow.** Getting this
 wrong means step pulses that silently violate the drives' timing requirements. Record
 the real values.
+
+> **Resolved (2026-08-05):** the IDROM reports ClockLow 100 MHz / ClockHigh 200 MHz
+> (`readhmid:17-18`); StepGen runs at 100 MHz (`readhmid:68`). The crystal is the PLL
+> reference and was never evidence about the logic clock
+> ([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md),
+> [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B5).
 
 ---
 
@@ -221,6 +241,12 @@ halcmd: show pin *gpio.02*
 Apply 24 V to terminal `20` (referenced to `G`) and watch which `gpio.NNN.in` flips.
 That is the only unambiguous answer, and it takes two minutes. Do it for all five.
 
+> **2026-10-18 — settled differently.** The label = IO-number question was closed by
+> the vendor diagram and the dumps ([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)).
+> On the test rig the five switches were then pressed by hand, each flipping one of
+> `gpio.020`–`024` ([DURUM.md](DURUM.md), switch map). Nothing records 24 V being applied
+> to an input; 24 V acceptance (B6) is still open.
+
 ---
 
 ## Hypothesis: the inputs are designed for 24 V
@@ -257,6 +283,11 @@ is unmistakable.
 **Conclusion (INFERRED): the inputs are designed for 24 V nominal.** 12 V would be
 marginal and 5 V will not work through this path.
 
+> **Update (2026-10-18, [DURUM.md](DURUM.md), B6 row):** on the test rig the five
+> switches *do* work at 5 V, so "5 V will not work" is contradicted for that wiring.
+> Which topology below is real is still unmeasured, and whether a 24 V sensor can be
+> connected directly is still open (B6).
+
 ### What the 510 Ω does — genuinely undetermined
 
 A photograph cannot show the topology. Three plausible arrangements, all common:
@@ -281,7 +312,9 @@ a 5 V source, and (c) would change how we wire sensors.
    settles what no amount of reasoning will.
 
 Until then: **plan for 24 V inputs, and do not connect a 5 V sensor** on the assumption
-that (c) is correct.
+that (c) is correct. (2026-10-18: on the test rig the switches already work at 5 V — see
+the update above. Which topology explains that is still unmeasured, so this caution
+still applies to new sensors.)
 
 ---
 
@@ -466,12 +499,12 @@ Fill in as each question closes. Record the readhmid dump filename that settled 
 
 | Q | Question | Status | Answer | Evidence |
 |---|---|---|---|---|
-| Q1 | AXIS blocks differential? | open | | |
+| Q1 | AXIS blocks differential? | **closed** 2026-08-03 | No — single-ended `GND STEP DIR 5V`; the 4th terminal is a 5 V supply for opto-isolated drives | vendor diagram, [08](08-zhulong-pinout-confirmed.md); OPEN-QUESTIONS B3 |
 | Q2 | W1/W2 function | open | | |
-| Q3 | Default IP | open | | |
-| Q4 | Encoder pins → GPIO | open | | |
-| Q5 | IDROM geometry 3×17? | open | | |
-| Q6 | OUT 1/2 device type | open | | |
-| Q7 | Isolation boundary | open | | |
-| — | Input labels 20–24 are IO numbers? | open | | |
-| — | Input voltage 24 V confirmed (opto P/N) | open | | |
+| Q3 | Default IP | answered in practice | Board answers on `10.10.10.10`, PC `10.10.10.1/24`. Whether that is the factory default (or a jumper setting — see Q2) is not recorded | `readhmid-10.10.10.10-2026-08-05.txt`; [DURUM.md](DURUM.md) |
+| Q4 | Encoder pins → GPIO | **closed at FPGA level** 2026-08-05 | Yes — `num_encoders=0` frees IO 25–33 (9 GPIO). The terminal front-end is still unverified: check with an ohmmeter before connecting a 24 V device | `printpd-10.10.10.10-2026-08-05.txt`:110-154; OPEN-QUESTIONS B2; [10](10-7i92-pinout-verified.md) |
+| Q5 | IDROM geometry 3×17? | **closed** 2026-08-05 | No — 2 × 17 = 34, BoardName `MESA7I92`, prefix `hm2_7i92.0`; clean path (Outcome A per [10](10-7i92-pinout-verified.md)) | `readhmid-10.10.10.10-2026-08-05.txt`:12, :15-16 |
+| Q6 | OUT 1/2 device type | answered from vendor diagram, not measured | NMOS, 24 V / 50 W, IO 18/19; no SSR module in the firmware. Needs the second isolated 24 V supply (B7) | [08](08-zhulong-pinout-confirmed.md); readhmid module inventory (:25-97) |
+| Q7 | Isolation boundary | open | Partial, per vendor diagram: OUT 1 / OUT 2 and 0-10V run from the external-device 24 V, which must be isolated from the main supply (no common ground). Everything else unmeasured | [08](08-zhulong-pinout-confirmed.md); OPEN-QUESTIONS B7 |
+| — | Input labels 20–24 are IO numbers? | **closed** 2026-08-03 (diagram) / 2026-08-05 (dumps) | Yes — the vendor diagram labels them `PIN20`…`PIN24`, and the dumps show IO 17–24 with no secondary tag (permanently GPIO). On the rig, each of the five switches flips one of `gpio.020`–`024` when pressed by hand | [08](08-zhulong-pinout-confirmed.md); OPEN-QUESTIONS (closed questions); `printpd`:94-109; [10](10-7i92-pinout-verified.md); [DURUM.md](DURUM.md) |
+| — | Input voltage 24 V confirmed (opto P/N) | open (B6) | Not confirmed. On the test rig the switches work at 5 V | [DURUM.md](DURUM.md), B6 row |

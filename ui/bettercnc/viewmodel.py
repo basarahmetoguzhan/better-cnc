@@ -105,11 +105,21 @@ def capabilities_for_screen(profile: MachineProfile, screen: str) -> List[Dict[s
 # ---------------------------------------------------------------------------
 
 
+def _reading_severity(value: Any, fault: bool) -> str:
+    """WARN for a value that could not be read: unknown is neither a fault
+    (ERROR) nor a clean reading (INFO)."""
+    if value is None:
+        return Severity.WARN.value
+    return Severity.ERROR.value if fault else Severity.INFO.value
+
+
 def link_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
     """Connection health.
 
     Carries the two indicators the prototype omitted and commissioning actually
-    needs: cumulative packet loss and the watchdog bit.
+    needs: cumulative packet loss and the watchdog bit. A pin that could not
+    be read shows "—" in WARN, and the servo period shows "—" when the INI
+    has none.
     """
     link = state.link
     rows = [
@@ -120,39 +130,40 @@ def link_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
             "hal": "",
         },
         {
-            "label": "Paket kaybı",
+            "label": "Kayıp paket",
             "value": "—" if link.packet_error_total is None else str(link.packet_error_total),
-            "severity": (
-                Severity.INFO.value
-                if (link.packet_error_total or 0) == 0
-                else Severity.ERROR.value
+            "severity": _reading_severity(
+                link.packet_error_total, (link.packet_error_total or 0) != 0
             ),
             "hal": link.HAL_PACKET_ERROR_TOTAL,
         },
         {
-            "label": "Watchdog",
+            # The hm2 watchdog, named for what it tells the operator; the HAL
+            # name stays in "hal" for maintenance.
+            "label": "Kart bağlantısı",
             "value": (
                 "—"
                 if link.watchdog_has_bit is None
-                else ("ISIRDI" if link.watchdog_has_bit else "sessiz")
+                else ("KOPTU" if link.watchdog_has_bit else "iyi")
             ),
-            "severity": (
-                Severity.ERROR.value if link.watchdog_has_bit else Severity.INFO.value
-            ),
+            "severity": _reading_severity(link.watchdog_has_bit, bool(link.watchdog_has_bit)),
             "hal": link.HAL_WATCHDOG_HAS_BIT,
         },
         {
-            "label": "io_error",
+            "label": "İletişim hatası",
             "value": (
-                "—" if link.io_error is None else ("HATA" if link.io_error else "yok")
+                "—" if link.io_error is None else ("VAR" if link.io_error else "yok")
             ),
-            "severity": Severity.ERROR.value if link.io_error else Severity.INFO.value,
+            "severity": _reading_severity(link.io_error, bool(link.io_error)),
             "hal": link.HAL_IO_ERROR,
         },
         {
             "label": "Servo döngü",
-            "value": "{:g} ms".format(link.servo_period_ms),
-            "severity": Severity.INFO.value,
+            "value": (
+                "—" if link.servo_period_ms is None
+                else "{:g} ms".format(link.servo_period_ms)
+            ),
+            "severity": _reading_severity(link.servo_period_ms, False),
             "hal": "",
         },
     ]
@@ -169,8 +180,20 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
     `drive_power` is hardware. `software` is LinuxCNC. The reset button may only
     ever affect the second, and `reset_clears_drive_power` is exposed as False so
     the UI can state that rather than leave it to be inferred.
+
+    While LinuxCNC's status is unknown the software row says "bilinmiyor":
+    the software state is LinuxCNC's, and it could not be read. Drive power
+    comes from a HAL pin and keeps its own reading.
     """
     e = state.estop
+    if not state.status_known:
+        software_label = "bilinmiyor"
+        software_severity = Severity.WARN.value
+    else:
+        software_label = e.software_label
+        software_severity = (
+            Severity.ERROR.value if e.software_disabled else Severity.INFO.value
+        )
     return {
         "drive_power": e.drive_power.value,
         "drive_power_label": e.drive_power_label,
@@ -183,11 +206,9 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
             else Severity.INFO.value
         ),
         "hardware_input_present": e.hardware_input_present,
-        "software_disabled": e.software_disabled,
-        "software_label": e.software_label,
-        "software_severity": (
-            Severity.ERROR.value if e.software_disabled else Severity.INFO.value
-        ),
+        "software_disabled": e.software_disabled if state.status_known else None,
+        "software_label": software_label,
+        "software_severity": software_severity,
         # The whole point of the panel:
         "reset_clears_drive_power": False,
         "reset_enabled": e.drive_power is not DrivePower.CUT,
@@ -204,41 +225,73 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
 
 
 def homing_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
-    """The homing gate."""
-    joints = [
-        {
-            "axis": j.axis,
-            "joint": j.joint,
-            "phase": j.phase.value,
-            "label": j.phase_label,
-            "homed": j.phase is HomingPhase.HOMED,
-            "sequence": j.sequence,
-            "ignore_limits": j.ignore_limits,
-            "direction": j.direction_label,
-            "severity": (
-                Severity.INFO.value
-                if j.phase is HomingPhase.HOMED
-                else Severity.WARN.value
-            ),
-        }
-        for j in state.homing.joints
-    ]
-    shares_switch = any(j["ignore_limits"] for j in joints)
-    return {
-        "joints": joints,
-        "all_homed": state.homing.all_homed,
-        "order_label": state.homing.order_label,
-        "order_source": "[JOINT_n]HOME_SEQUENCE",
-        "order_note": homing_order_note(config),
-        "shares_home_and_limit": shares_switch,
-        "shares_warning": (
+    """The homing gate.
+
+    HOME_IGNORE_LIMITS is a config fact, so it is read from the config where
+    the INI has the joint: AxisConfig also keeps the raw text, which the
+    unreadable-value message names. JointHoming.ignore_limits carries the
+    same Optional[bool] (None = unreadable), passed through by the adapters,
+    and is the fallback for a joint the config does not list. Either way an
+    unknown must not read as "limits active".
+
+    While LinuxCNC's status is unknown, no joint's phase is known either:
+    each chip says "bilinmiyor" and `homed` is None.
+    """
+    from_ini = {a.joint: a for a in config.axes}
+    known = state.status_known
+    joints = []
+    unreadable = []
+    for j in state.homing.joints:
+        ac = from_ini.get(j.joint)
+        ignore = ac.home_ignore_limits if ac is not None else j.ignore_limits
+        if ignore is None:
+            raw = ac.home_ignore_limits_raw if ac is not None else ""
+            unreadable.append("{} ({!r})".format(j.axis, raw))
+        joints.append(
+            {
+                "axis": j.axis,
+                "joint": j.joint,
+                "phase": j.phase.value if known else "unknown",
+                "label": j.phase_label if known else "bilinmiyor",
+                "homed": (j.phase is HomingPhase.HOMED) if known else None,
+                "sequence": j.sequence,
+                "ignore_limits": ignore,
+                "direction": j.direction_label,
+                "severity": (
+                    Severity.INFO.value
+                    if known and j.phase is HomingPhase.HOMED
+                    else Severity.WARN.value
+                ),
+            }
+        )
+    shares_switch = any(j["ignore_limits"] is True for j in joints)
+    warning = []
+    if shares_switch:
+        warning.append(
             "Home ve limit aynı switch'te → HOME_IGNORE_LIMITS = YES. "
             "Referans alma sırasında limitler yok sayılır: switch'in yanlış "
             "tarafından başlanırsa ekseni durduracak hiçbir şey yoktur "
             "(ini-homing.adoc:46)."
-            if shares_switch
-            else ""
-        ),
+        )
+    if unreadable:
+        # EmcIniFile::Find(bool) accepts an integer or TRUE/YES/FALSE/NO
+        # (emcIniFile.cc:50-58, inifile.cc:122-139); anything else fails the
+        # joint's INI load (inijoint.cc:102, :236-239).
+        warning.append(
+            "HOME_IGNORE_LIMITS okunamadı: {}. LinuxCNC yalnızca bir tamsayı ya "
+            "da TRUE/YES/FALSE/NO kabul eder, bu değerle eklemi yüklemez. "
+            "Referans alma sırasında limitlerin yok sayılıp sayılmayacağı "
+            "bilinmiyor.".format(", ".join(unreadable))
+        )
+    return {
+        "joints": joints,
+        "all_homed": state.homing.all_homed if known else None,
+        "order_label": state.homing.order_label,
+        "order_source": "[JOINT_n]HOME_SEQUENCE",
+        "order_note": homing_order_note(config),
+        "shares_home_and_limit": shares_switch,
+        "ignore_limits_unknown": bool(unreadable),
+        "shares_warning": " ".join(warning),
     }
 
 
@@ -305,31 +358,76 @@ def gate_panel(state: MachineState, config: MachineConfig, profile: MachineProfi
 # ---------------------------------------------------------------------------
 
 
+#: The feed-override chips the Kontrol screen offers, in percent.
+FEED_OVERRIDE_CHOICES = (50, 100, 150)
+
+
+def feed_chips(config: MachineConfig) -> List[Dict[str, Any]]:
+    """One dict per feed-override chip: pct, enabled, reason.
+
+    A choice above the INI's ceiling (config.max_feed_override_pct) is shown
+    disabled with the reason, not hidden: LinuxCncAdapter would only clamp
+    it, so offering it promised a speed the machine never allows (found in
+    sim/ on 2026-10-19, the rig's ceiling being 100 %). With no INI every
+    chip is disabled: LinuxCncAdapter refuses every feed change then.
+    """
+    ceiling = config.max_feed_override_pct
+    chips = []
+    for pct in FEED_OVERRIDE_CHOICES:
+        if ceiling is None:
+            reason = "INI yok — besleme sınırı ([DISPLAY]MAX_FEED_OVERRIDE) bilinmiyor"
+        elif pct > ceiling:
+            reason = "INI sınırı %{} ([DISPLAY]MAX_FEED_OVERRIDE)".format(ceiling)
+        else:
+            reason = ""
+        chips.append({"pct": pct, "enabled": not reason, "reason": reason})
+    return chips
+
+
 def control_screen(
     profile: MachineProfile, config: MachineConfig, state: MachineState
 ) -> Dict[str, Any]:
+    """The Kontrol screen.
+
+    While LinuxCNC's status is unknown (MachineState.status_known), the DRO
+    and the WCS read "—" and no feed-override chip is marked active
+    (feed_override None): the adapter's values for them are placeholders.
+    The DRO keeps a row per axis even when the adapter reports no positions
+    then (LinuxCncAdapter._status_unreadable): the axes are a config fact.
+    The WCS and feed chips stay as buttons; the jog step is the UI's own
+    setting, not a LinuxCNC reading. `jog_disabled_reason` says why jog is
+    off without claiming the machine is off when that is not known.
+    """
+    known = state.status_known
+    if known:
+        shown = [(p.axis, p) for p in state.positions]
+    else:
+        letters = [p.axis for p in state.positions] or [a.axis for a in config.axes]
+        shown = [(axis, None) for axis in letters]
     axes = []
-    for pos in state.positions:
-        ac = config.axis(pos.axis)
+    for axis, pos in shown:
+        ac = config.axis(axis)
         axes.append(
             {
-                "axis": pos.axis,
-                "work": "{:+.3f}".format(pos.work),
-                "machine": "{:+.3f}".format(pos.machine),
-                "homed": pos.homed,
+                "axis": axis,
+                "work": "—" if pos is None else "{:+.3f}".format(pos.work),
+                "machine": "—" if pos is None else "{:+.3f}".format(pos.machine),
+                "homed": None if pos is None else pos.homed,
                 "travel": ac.travel.display if ac else UNMEASURED,
                 "travel_measured": bool(ac and ac.travel.measured),
             }
         )
     return {
+        "status_known": known,
         "axes": axes,
-        "wcs": state.wcs,
+        "wcs": state.wcs if known else "—",
         "wcs_options": ["G54", "G55", "G56"],
         "jog_steps": [0.01, 0.1, 1.0, 10.0, 50.0],
         "jog_step": state.jog_step_mm,
-        "feed_overrides": [50, 100, 150],
-        "feed_override": state.feed_override_pct,
+        "feed_overrides": feed_chips(config),
+        "feed_override": state.feed_override_pct if known else None,
         "can_jog": state.can_jog,
+        "jog_disabled_reason": _motion_off_reason(state, "jog kapalı"),
         "estop": estop_panel(state),
         "homing": homing_panel(state, config),
         "gate": gate_panel(state, config, profile),
@@ -387,13 +485,23 @@ def control_tiles(
     ]
 
 
+def _motion_off_reason(state: MachineState, consequence: str) -> str:
+    """Why jog or MDI is off, "" while MachineState.can_jog allows it.
+
+    An unreadable status is named as such: "devre dışı" would be read off a
+    placeholder."""
+    if state.can_jog:
+        return ""
+    if not state.status_known:
+        return "Makine durumu bilinmiyor — {}.".format(consequence)
+    return "Makine devre dışı — {}.".format(consequence)
+
+
 def mdi_panel(state: MachineState) -> Dict[str, Any]:
     """Free text entry plus history. The prototype had presets only."""
     return {
         "enabled": state.can_jog,
-        "disabled_reason": (
-            "" if state.can_jog else "Makine devre dışı — MDI kabul edilmiyor."
-        ),
+        "disabled_reason": _motion_off_reason(state, "MDI kabul edilmiyor"),
         "presets": ["G0 Z5", "G53 G0 Z0", "M5", "G92.1"],
         "history": [
             {"command": e.command, "accepted": e.accepted, "note": e.note}
@@ -410,16 +518,20 @@ def program_screen(
 
     The prototype shipped five invented filenames with invented line counts and
     run times. None of that traces to anything, so none of it is carried over.
+
+    The loaded file and the run state come from LinuxCNC's status, so they
+    are None while it is unknown.
     """
+    known = state.status_known
     return {
         "files": [],
         "files_empty_reason": (
             "Program dizini tanımlı değil ve depoda .ngc dosyası yok. "
             "PROGRAM_PREFIX = ../../nc_files/ (test-rig.ini)"
         ),
-        "loaded": state.program_file,
-        "running": state.program_running,
-        "progress_pct": round(state.program_progress * 100, 1),
+        "loaded": state.program_file if known else None,
+        "running": state.program_running if known else None,
+        "progress_pct": round(state.program_progress * 100, 1) if known else None,
         "gate": gate_panel(state, config, profile),
         "can_start": state.can_start_program,
         "capabilities": capabilities_for_screen(profile, "program"),
@@ -632,10 +744,11 @@ def machine_screen(
                 {"label": "hm2 config", "value": config.hm2_config_string or "—"},
                 {
                     "label": "Servo döngü",
+                    # Same rule as the link card's row (link_panel), so the
+                    # two cards of this screen cannot disagree.
                     "value": (
-                        "{:g} ms".format(config.servo_period_ms)
-                        if config.servo_period_ms
-                        else "—"
+                        "—" if config.servo_period_ms is None
+                        else "{:g} ms".format(config.servo_period_ms)
                     ),
                 },
             ]

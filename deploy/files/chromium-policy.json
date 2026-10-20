@@ -1,0 +1,53 @@
+{
+  "URLBlocklist": [
+    "*",
+    "chrome://*",
+    "chrome-untrusted://*",
+    "devtools://*",
+    "file://*",
+    "view-source:*"
+  ],
+  "URLAllowlist": [
+    "http://127.0.0.1:8079",
+    "http://127.0.0.1:8080",
+    "file:///usr/share/bettercnc/wait.html"
+  ],
+  "DeveloperToolsAvailability": 2,
+  "BrowserThemeColor": "#161826",
+  "PrintingEnabled": false,
+  "DownloadRestrictions": 3,
+  "AllowFileSelectionDialogs": false,
+  "IncognitoModeAvailability": 1,
+  "BrowserGuestModeEnabled": false,
+  "BrowserAddPersonEnabled": false,
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "TranslateEnabled": false,
+  "SpellcheckEnabled": false,
+  "BookmarkBarEnabled": false,
+  "TaskManagerEndProcessEnabled": false,
+  "DefaultNotificationsSetting": 2,
+  "DefaultGeolocationSetting": 2,
+  "NewTabPageLocation": "http://127.0.0.1:8079/",
+  "HomepageLocation": "http://127.0.0.1:8079/",
+  "HomepageIsNewTabPage": false,
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": [
+    "http://127.0.0.1:8079/"
+  ],
+  "DefaultSearchProviderEnabled": false,
+  "SearchSuggestEnabled": false,
+  "DefaultPopupsSetting": 2,
+  "CommandLineFlagSecurityWarningsEnabled": false,
+  "AllowDinosaurEasterEgg": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "ExtensionInstallBlocklist": [
+    "*"
+  ],
+  "DefaultBrowserSettingEnabled": false,
+  "MetricsReportingEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "SavingBrowserHistoryDisabled": true
+}

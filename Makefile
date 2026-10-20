@@ -15,7 +15,7 @@ PYTHON ?= python3
 export PYTHONPATH := ui:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
-.PHONY: help test test-ui test-scripts coverage ui ui-marble dump lint clean
+.PHONY: help test test-ui test-scripts coverage ui ui-marble dump lint clean sim-build sim sim-stop sim-test sim-kiosk sim-lint
 
 help:  ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -49,8 +49,27 @@ dump:  ## render one screen to stdout: make dump SCREEN=makine
 	$(PYTHON) -m bettercnc.app --dump $(or $(SCREEN),makine)
 
 lint:  ## byte-compile everything as a cheap syntax check
-	$(PYTHON) -m compileall -q ui/bettercnc ui/tests ui/tools scripts && echo "syntax OK"
+	$(PYTHON) -m compileall -q ui/bettercnc ui/tests ui/tools scripts sim deploy && echo "syntax OK"
+
+# Simulator: real LinuxCNC 2.9.9 in Docker (arm64), no board. sim/README.md.
+sim-build:  ## build the simulator image (Docker, once)
+	sim/sim.sh build
+
+sim:  ## LinuxCNC sim + the UI on LinuxCncAdapter, http://localhost:8770/
+	sim/sim.sh up
+
+sim-stop:  ## stop the simulator
+	sim/sim.sh down
+
+sim-test:  ## the whole test suite inside the simulator image (arm64, Python 3.13)
+	sim/sim.sh test
+
+sim-kiosk:  ## deploy/'s kiosk in the simulator, headless; then: sim/sim.sh shot x.png
+	sim/sim.sh kiosk
+
+sim-lint:  ## shellcheck sim/ and deploy/, verify the kiosk's systemd unit
+	sim/sim.sh lint
 
 clean:  ## drop __pycache__
-	find ui scripts -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+	find ui scripts sim deploy -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
 	@echo cleaned

@@ -10,6 +10,7 @@ from. Nothing in this module may assert a hardware number that is not traceable.
 
 from __future__ import annotations
 
+import os
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from .capabilities import (
@@ -20,7 +21,8 @@ from .capabilities import (
     present,
     todo,
 )
-from .iniload import test_rig_ini_path
+from .configmodel import MachineConfig, load_config_from_ini
+from .iniload import repo_root, test_rig_ini_path
 
 # ---------------------------------------------------------------------------
 # Board and platform facts
@@ -61,13 +63,18 @@ class PlatformInfo(NamedTuple):
     `latency_us` is Optional and is None because it was never measured. The
     prototype invented 38 microseconds. See docs/05-pi-setup.md section b for the
     procedure that would produce a real figure.
+
+    `servo_period_ms` is not what the screens show: the link card and the
+    Makine config card read [EMCMOT]SERVO_PERIOD from the INI
+    (configmodel.MachineConfig.servo_period_ms) and show "—" without one.
+    None here means no source gives a value.
     """
 
     kernel: str
     linuxcnc: str
     host: str
     nic: str
-    servo_period_ms: float
+    servo_period_ms: Optional[float]
     latency_us: Optional[float]
     latency_note: str
     source: str
@@ -80,6 +87,8 @@ TEST_RIG_PLATFORM = PlatformInfo(
     linuxcnc="2.9.10 uspace",
     host="Monster laptop · live USB, 10 GB persistence",
     nic="enp3s0 (Realtek RTL8125, 100 Mbps Full) · 10.10.10.1/24",
+    # configs/test-rig/test-rig.ini [EMCMOT]SERVO_PERIOD = 1000000 ns. Not in
+    # docs/DURUM.md:20-27, which the rest of this record cites.
     servo_period_ms=1.0,
     latency_us=None,
     latency_note="latency-test hiç çalıştırılmadı",
@@ -92,7 +101,7 @@ MARBLE_PLATFORM = PlatformInfo(
     linuxcnc="TODO",
     host="TODO — kalıcı kurulum planlanmadı",
     nic="TODO",
-    servo_period_ms=1.0,
+    servo_period_ms=None,  # no INI and no source for the marble machine yet
     latency_us=None,
     latency_note="ölçülmedi — makine kurulmadı",
     source="docs/MERMER-GECIS.md",
@@ -117,7 +126,7 @@ class DigitalInput(NamedTuple):
     pin: str            # gpio.020
     label: str          # Turkish UI label
     axis: str           # X / Y / Z / "" if not axis-related
-    end: str            # "+" / "-" / "" - which end of travel
+    end: str            # "+" / "-" / "" - which end of travel ("" = not known, never guessed)
     idle_high: bool
     source: str
 
@@ -147,16 +156,20 @@ class MissingSwitch(NamedTuple):
     source: str
 
 
-#: Hand-verified by triggering each switch and watching halmeter.
-#: docs/DURUM.md:69-80
+#: Switch locations hand-verified by triggering each switch (docs/DURUM.md:69-80).
+#: The travel END follows from the jog directions X+ = right, Z+ = up
+#: (docs/DURUM.md:82). Y's direction is unknown - its DIR fault makes Y+ and Y-
+#: move the same way - so which Y switch is the + end is "", not guessed.
 TEST_RIG_INPUTS: Tuple[DigitalInput, ...] = (
-    DigitalInput("gpio.020", "X sağ uç", "X", "+", True, "docs/DURUM.md:75"),
-    DigitalInput("gpio.021", "X sol uç", "X", "-", True, "docs/DURUM.md:76"),
-    DigitalInput("gpio.022", "Y arka uç", "Y", "+", True, "docs/DURUM.md:77"),
-    DigitalInput("gpio.023", "Y ön uç", "Y", "-", True, "docs/DURUM.md:78"),
-    DigitalInput("gpio.024", "Z üst", "Z", "+", True, "docs/DURUM.md:79"),
+    DigitalInput("gpio.020", "X sağ uç", "X", "+", True, "docs/DURUM.md:75, :82"),
+    DigitalInput("gpio.021", "X sol uç", "X", "-", True, "docs/DURUM.md:76, :82"),
+    DigitalInput("gpio.022", "Y arka uç", "Y", "", True, "docs/DURUM.md:77, :82"),
+    DigitalInput("gpio.023", "Y ön uç", "Y", "", True, "docs/DURUM.md:78, :82"),
+    DigitalInput("gpio.024", "Z üst", "Z", "+", True, "docs/DURUM.md:79, :82"),
 )
 
+#: As long as Z's travel is unmeasured. _test_rig_missing_switches swaps in the
+#: measured wording once the INI's Z limits lose their ASSUMPTION markers.
 TEST_RIG_MISSING_SWITCHES: Tuple[MissingSwitch, ...] = (
     MissingSwitch(
         axis="Z",
@@ -168,6 +181,22 @@ TEST_RIG_MISSING_SWITCHES: Tuple[MissingSwitch, ...] = (
         ),
         source="docs/DURUM.md:80",
     ),
+)
+
+#: With Z's travel measured the soft limit exists, but LinuxCNC applies it as
+#: an absolute limit only once the joint is homed. Unhomed, the jog limit is
+#: the current position plus or minus the full travel range
+#: (reference/linuxcnc/src/emc/motion/command.c:154-175).
+_Z_BOTTOM_MEASURED = MissingSwitch(
+    axis="Z",
+    end="-",
+    label="Z alt",
+    consequence=(
+        "Z ekseninin alt ucunda switch YOK. Aşağı yönde donanımsal durdurma "
+        "yok — tek koruma yazılım limiti, o da ancak referans alındıktan sonra "
+        "geçerli (referanssız jog'da sınır, bulunulan konumdan bir strok ötede)."
+    ),
+    source="docs/DURUM.md:80, command.c:154-175",
 )
 
 #: Not yet surveyed. docs/MERMER-GECIS.md:94-110 sketches a plan for 14 inputs
@@ -207,9 +236,6 @@ class MachineProfile(NamedTuple):
     def inputs_for_axis(self, axis: str) -> List[DigitalInput]:
         return [i for i in self.inputs if i.axis == axis]
 
-    def missing_for_axis(self, axis: str) -> List[MissingSwitch]:
-        return [m for m in self.missing_switches if m.axis == axis]
-
 
 _NO_ISOLATED_24V = (
     "İkinci izole 24V kaynak alınmadı (B7). Üretici ortak şaseyi yasaklıyor; "
@@ -217,8 +243,80 @@ _NO_ISOLATED_24V = (
 )
 
 
-def test_rig_profile() -> MachineProfile:
-    """The wooden 3-axis router. Everything here is verified or explicitly absent."""
+def _cite(path: str) -> str:
+    """`path` as a repo-relative citation when it lies inside the repo."""
+    root = repo_root()
+    if os.path.commonpath([os.path.abspath(path), root]) == root:
+        return os.path.relpath(path, root)
+    return path
+
+
+def _soft_limits_from_ini(config: MachineConfig, ini_path: str) -> CapabilityState:
+    """SOFT_LIMITS as the INI states it, never restated by hand.
+
+    The iniload module docstring promises that deleting the ASSUMPTION
+    markers once travel is measured updates the UI with no code change. A
+    hardcoded "not measured" here would stay up after that edit, contradicting
+    the DRO and the Makine axis rows, which already follow the INI.
+
+    PRESENT only when MachineConfig.soft_limits_configured holds: every axis
+    has both limits and neither is provisional (configmodel.py).
+    """
+    ini = _cite(ini_path)
+    if config.soft_limits_configured:
+        return present(
+            "{} [JOINT_n]MIN_LIMIT/MAX_LIMIT — ASSUMPTION işareti yok".format(ini)
+        )
+    requirement = "Her eksende uçtan uca jog + cetvelle ölçüm, sonra MIN_LIMIT/MAX_LIMIT"
+    source = "{} (ASSUMPTION blokları), docs/DURUM.md:139".format(ini)
+    if not config.axes:
+        return absent(
+            "INI'de eklem ([JOINT_n]) yok — yazılım limiti tanımsız, gerçek "
+            "çarpışma koruması yok.",
+            requirement,
+            source,
+        )
+    missing = [
+        a.axis for a in config.axes
+        if a.travel.min_limit is None or a.travel.max_limit is None
+    ]
+    provisional = [
+        a.axis for a in config.axes
+        if not a.travel.measured and a.axis not in missing
+    ]
+    parts = []
+    if provisional:
+        parts.append(
+            "Strok ÖLÇÜLMEDİ ({}). INI'deki değerler yer tutucu (ASSUMPTION)".format(
+                ", ".join(provisional)
+            )
+        )
+    if missing:
+        parts.append("MIN_LIMIT/MAX_LIMIT eksik ({})".format(", ".join(missing)))
+    return absent(
+        ". ".join(parts) + " — gerçek çarpışma koruması yok.", requirement, source
+    )
+
+
+def _test_rig_missing_switches(config: MachineConfig) -> Tuple[MissingSwitch, ...]:
+    z = config.axis("Z")
+    if z is not None and z.travel.has_crash_protection:
+        return (_Z_BOTTOM_MEASURED,)
+    return TEST_RIG_MISSING_SWITCHES
+
+
+def test_rig_profile(ini_path: Optional[str] = None) -> MachineProfile:
+    """The wooden 3-axis router. Everything here is verified, explicitly absent, or
+    explicitly marked unknown / unmeasured (e.g. which Y switch is the + end, travel).
+
+    Travel facts (SOFT_LIMITS, travel_measured, travel_note, the Z-bottom
+    consequence) are read from the INI at `ini_path`, by default
+    configs/test-rig/test-rig.ini, through the same loader the screens use.
+    """
+    if ini_path is None:
+        ini_path = test_rig_ini_path()
+    config = load_config_from_ini(ini_path)
+    travel_measured = config.soft_limits_configured
     caps: Dict[Capability, CapabilityState] = {
         Capability.SPINDLE: absent(
             "Bu makinede iğ mili yok — mil elle çalıştırılıyor, kontrolcüye bağlı değil.",
@@ -256,11 +354,13 @@ def test_rig_profile() -> MachineProfile:
             "docs/MERMER-GECIS.md:39",
         ),
         Capability.ESTOP_INPUT: absent(
-            "Donanımsal acil stop girişi YOK. 5 girişin 5'i limit/home switch'lerinde. "
+            "Donanımsal acil stop girişi YOK. 5 izole girişin 5'i limit/home switch'lerinde. "
             "Sadece GUI acil stop var; o hareketi durdurur ama hiçbir yerden güç kesmez.",
-            "Bir GPIO girişi + kontaktör/güvenlik rölesi. "
-            "num_encoders=0 sayesinde IO 25-33 boş, fiziksel olarak mümkün.",
-            "docs/MERMER-GECIS.md:40, configs/test-rig/README.md",
+            "Sürücü gücünü kesen donanımsal zincir (kontaktör/güvenlik rölesi) + LinuxCNC'nin "
+            "görmesi için bir GPIO girişi. num_encoders=0 ile IO 25-33 (encoder klemensleri) "
+            "GPIO olarak boşta, ama arkalarındaki analog devre doğrulanmadı — 24V bağlamadan "
+            "önce ohmmetreyle kontrol (OPEN-QUESTIONS B2).",
+            "docs/MERMER-GECIS.md:40, :112-114, configs/test-rig/README.md",
         ),
         Capability.DOOR_SWITCH: absent(
             "Kapak yok — açık tezgah.",
@@ -272,30 +372,29 @@ def test_rig_profile() -> MachineProfile:
             "num_stepgens=4 — stepgen.03 zaten IO 10/11'de hazır, firmware değişmiyor",
             "docs/MERMER-GECIS.md:41",
         ),
-        Capability.SOFT_LIMITS: absent(
-            "Strok ÖLÇÜLMEDİ. INI'deki değerler yer tutucu (ASSUMPTION) — "
-            "gerçek çarpışma koruması yok.",
-            "Her eksende uçtan uca jog + cetvelle ölçüm, sonra MIN_LIMIT/MAX_LIMIT",
-            "configs/test-rig/test-rig.ini (ASSUMPTION blokları), docs/DURUM.md:139",
-        ),
+        Capability.SOFT_LIMITS: _soft_limits_from_ini(config, ini_path),
     }
     return MachineProfile(
         key="test-rig",
         label="Test tezgahı",
         subtitle="Ev yapımı ahşap 3 eksen router",
-        ini_path=test_rig_ini_path(),
+        ini_path=ini_path,
         capabilities=caps,
         inputs=TEST_RIG_INPUTS,
-        missing_switches=TEST_RIG_MISSING_SWITCHES,
+        missing_switches=_test_rig_missing_switches(config),
         board=ZHULONG_BOARD,
         platform=TEST_RIG_PLATFORM,
-        travel_measured=False,
+        travel_measured=travel_measured,
         travel_note=(
-            "Strok ölçülmedi. GRBL'deki $130-132 = 200 mm fabrika varsayılanıydı, "
+            "Strok ölçüldü — MIN_LIMIT/MAX_LIMIT INI'den, ASSUMPTION işareti yok."
+            if travel_measured
+            else "Strok ölçülmedi. GRBL'deki $130-132 = 200 mm fabrika varsayılanıydı, "
             "kalibre edilmiş değil."
         ),
         notes=(
-            "Y ekseni DIR kablosunda aktif arıza — yön değişmiyor (docs/DURUM.md:12).",
+            "Y ekseninin DIR hattında aktif arıza — yön değişmiyor; yeri (kart klemensi, "
+            "kablo ya da sürücü) henüz ölçülmedi (docs/DURUM.md:12). Y'nin hangi ucunun + "
+            "olduğu bilinmiyor (docs/DURUM.md:82).",
             "Home ve limit aynı switch'i paylaşıyor → her eklemde HOME_IGNORE_LIMITS = YES.",
         ),
     )
@@ -328,13 +427,13 @@ def marble_profile() -> MachineProfile:
             "Debi sensörü satın alınmadı.",
             "Sensör + bir GPIO girişi (IO 25 planlandı — encoder klemensi, "
             "arkasındaki analog devre doğrulanmadı)",
-            "docs/MERMER-GECIS.md:18, :112-114",
+            "docs/MERMER-GECIS.md:17, :108, :112-114",
         ),
         Capability.FLOW_INTERLOCK: todo(
             "Su kilidi HAL mantığı yazılmadı. Elmas uç susuz kesimde saniyeler "
             "içinde gider — bu kilit pazarlık konusu değil.",
             "Debi sensörü + HAL mantığı: debi yoksa iğ mili dönmez",
-            "docs/MERMER-GECIS.md:38, :120-122",
+            "docs/MERMER-GECIS.md:38, :140",
         ),
         Capability.TOOL_PROBE: todo(
             reason_unsurveyed + " Prob olup olmadığı bilinmiyor.",
@@ -344,13 +443,13 @@ def marble_profile() -> MachineProfile:
         Capability.TOOL_LENGTH_SENSOR: todo(
             "Takım boyu sensörü satın alınmadı. Elmas uçların boy telafisi için gerekli.",
             "Sensör + bir GPIO girişi",
-            "docs/MERMER-GECIS.md:19",
+            "docs/MERMER-GECIS.md:18",
         ),
         Capability.ESTOP_INPUT: todo(
             "Acil stop zinciri tasarlanmadı. Mermer makinesinde bu ZORUNLU — "
             "sürücü ve iğ mili gücünü donanımsal kesmeli.",
             "Kontaktör/güvenlik rölesi + bir GPIO girişi (IO 23 planlandı)",
-            "docs/MERMER-GECIS.md:40, :120-122",
+            "docs/MERMER-GECIS.md:40, :106, :139",
         ),
         Capability.DOOR_SWITCH: todo(
             reason_unsurveyed + " Kapak var mı bilinmiyor.",
@@ -372,7 +471,7 @@ def marble_profile() -> MachineProfile:
     return MachineProfile(
         key="marble",
         label="Mermer makinesi",
-        subtitle="Endüstriyel 3 eksen mermer CNC · Faz 2, beklemede",
+        subtitle="Endüstriyel 3 eksen mermer CNC · beklemede (önce test tezgahı)",
         ini_path=None,
         capabilities=caps,
         inputs=MARBLE_INPUTS,

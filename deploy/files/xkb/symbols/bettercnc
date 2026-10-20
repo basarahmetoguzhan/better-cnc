@@ -1,0 +1,75 @@
+// deploy/files/xkb: the kiosk keyboard, XKB option bettercnc:kiosk.
+//
+// The operator types G-code into MDI and nothing else, so a key that only
+// ever reaches the browser's own shortcuts produces nothing at all: no
+// Ctrl+T, Ctrl+N, Ctrl+L, Ctrl+W, Alt+F4, F5, F11, F12, no Back/Home/Search
+// keys. Pages cannot block every one of those (Chromium keeps Ctrl+T, Ctrl+N,
+// Ctrl+W for itself), the keymap can. Tab is gone too: it walks a focus ring
+// over the buttons, a web page's habit (2026-10-20), and G-code needs no tab.
+// Letters, digits, Shift, Enter, Backspace, arrows and Escape are untouched.
+//
+// Explicit NoAction(): with only VoidSymbol the compat interpretations could
+// still bind a modifier to the keycode; with an explicit action they are
+// not applied, so the key changes no modifier state.
+// Right Alt becomes AltGr only (never Alt): on a Turkish keyboard it types
+// the # [ ] that G-code parameters and expressions need.
+
+partial modifier_keys function_keys alphanumeric_keys
+xkb_symbols "kiosk" {
+    // Tab
+    key <TAB> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    // Ctrl, Alt, Super, Menu
+    key <LCTL> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <RCTL> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <LALT> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <LWIN> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <RWIN> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <MENU> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <RALT> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ ISO_Level3_Shift ], actions[Group1] = [ SetMods(modifiers = LevelThree) ] };
+    // F1-F24
+    key <FK01> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK02> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK03> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK04> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK05> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK06> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK07> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK08> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK09> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK10> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK11> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK12> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK13> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK14> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK15> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK16> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK17> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK18> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK19> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK20> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK21> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK22> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK23> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    key <FK24> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };
+    // keys the browser would act on
+    key <OPEN> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Open
+    key <I128> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86LaunchA
+    key <I148> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Calculator
+    key <I152> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Explorer
+    key <I158> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86WWW
+    key <I163> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Mail
+    key <I164> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Favorites
+    key <I165> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86MyComputer
+    key <I166> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Back
+    key <I167> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Forward
+    key <I179> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Tools
+    key <I180> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86HomePage
+    key <I181> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Reload
+    key <I182> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Close
+    key <I189> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86New
+    key <I192> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86LaunchA
+    key <I214> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Close
+    key <I223> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Mail
+    key <I225> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Search
+    key <I372> { type[Group1] = "ONE_LEVEL", symbols[Group1] = [ VoidSymbol ], actions[Group1] = [ NoAction() ] };   // was XF86Favorites
+};

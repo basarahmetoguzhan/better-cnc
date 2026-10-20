@@ -201,8 +201,9 @@ Kaynak: [readhmid:13-16](board-dumps/readhmid-10.10.10.10-2026-08-05.txt),
    üretici kendi konfigürasyonunu derlemiş. Ama bu 7i92 için **normal** bir
    durum — kart bunun için var.
 2. **DB25 yerine kendi ön yüzü** — vidalı klemensler, STEP/DIR için optokuplör
-   sürücüler, girişler için 24 V izole optokuplörler, PWM'den 0-10 V analog
-   dönüştürücü, NMOS çıkışlar.
+   sürücüler, girişler için izole optokuplörler (24 V için tasarlandığı INFERRED,
+   [04](04-zhulong-board-hardware.md) — B6 açık; test tezgahında 5V ile çalışıyor,
+   [DURUM.md:171](DURUM.md)), PWM'den 0-10 V analog dönüştürücü, NMOS çıkışlar.
 
 **Yani "yalan söyleyen klon" değil.** Kart gerçekten 7i92 sınıfı bir cihaz,
 üzerine üreticinin I/O ön yüzü eklenmiş. Sürücü açısından hiçbir uyumsuzluk yok:

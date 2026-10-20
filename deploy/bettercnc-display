@@ -1,0 +1,50 @@
+#!/bin/bash
+# [DISPLAY]DISPLAY of a kiosk INI (deploy/make_kiosk_ini.py).
+#
+# LinuxCNC starts its display program last, as `<program> -ini <file> ...`,
+# and shuts down when it exits (reference/linuxcnc/scripts/linuxcnc.in:975-1003).
+# So the operator UI is started here, by LinuxCNC itself: after LinuxCNC is up
+# and as LinuxCNC's own user, with its HOME - the two things
+# adapter.LinuxCncAdapter._probe_status checks. If the UI exits, LinuxCNC
+# shuts down (motion off) and deploy/kiosk-session starts it again.
+#
+# Environment (set by deploy/kiosk-session; the defaults serve a manual
+# `linuxcnc configs/test-rig/test-rig-kiosk.ini` from a desktop):
+#   BETTERCNC_PROFILE   UI profile                       (test-rig)
+#   BETTERCNC_UI_PORT   UI port, on 127.0.0.1 only       (8080)
+#   BETTERCNC_BOOT_URL  where the page goes when the UI stops answering (none)
+#   BETTERCNC_LOST_EXIT_S       exit when LinuxCNC is gone or half gone this
+#                               long (3; deploy/README.md "Süreler")
+#   BETTERCNC_EXIT_REASON_FILE  where the UI writes why it exited (none)
+set -u
+
+DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$DEPLOY_DIR")"
+PROFILE="${BETTERCNC_PROFILE:-test-rig}"
+PORT="${BETTERCNC_UI_PORT:-8080}"
+
+# Ready means LinuxCNC's status reads. Each try is a fresh process: a poll
+# that fails before LinuxCNC is up spoils its process for good
+# (adapter.POLL_SPOILED), so the UI's own process must not be the one to try.
+for i in $(seq 1 30); do
+  if timeout 5 python3 -c 'import linuxcnc; linuxcnc.stat().poll()' >/dev/null 2>&1; then
+    break
+  fi
+  if [ "$i" = 30 ]; then
+    echo "bettercnc-display: LinuxCNC'nin durumu 30 s içinde okunamadı" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+args=(--profile "$PROFILE" --adapter linuxcnc --host 127.0.0.1 --port "$PORT"
+      --exit-if-linuxcnc-lost "${BETTERCNC_LOST_EXIT_S:-3}")
+if [ -n "${BETTERCNC_BOOT_URL:-}" ]; then
+  args+=(--boot-url "$BETTERCNC_BOOT_URL")
+fi
+if [ -n "${BETTERCNC_EXIT_REASON_FILE:-}" ]; then
+  args+=(--exit-reason-file "$BETTERCNC_EXIT_REASON_FILE")
+fi
+export PYTHONPATH="$REPO/ui${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 -m bettercnc.app "${args[@]}"

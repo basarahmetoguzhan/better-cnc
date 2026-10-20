@@ -1,0 +1,47 @@
+# Installed by deploy/kiosk.sh as /etc/systemd/system/bettercnc-kiosk.service.
+# @USER@ @HOME@ @REPO@ @INI@ @PROFILE@ @LAYOUT@ are filled in at install; do not edit
+# the installed copy, re-run `deploy/kiosk.sh install` instead.
+#
+# cage on tty1 runs deploy/kiosk-session: no desktop behind it, no window
+# manager, and VT switching off (cage allows it only with -s), so the operator
+# cannot leave the UI. Ways out, for maintenance (deploy/README.md): SSH, the
+# kernel parameter bettercnc.kiosk=0, or /etc/bettercnc/kiosk-disabled.
+[Unit]
+Description=better-cnc kiosk: LinuxCNC + operator UI on tty1
+Documentation=file://@REPO@/deploy/README.md
+After=systemd-user-sessions.service plymouth-quit-wait.service network-online.target
+Wants=network-online.target
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+ConditionKernelCommandLine=!bettercnc.kiosk=0
+ConditionPathExists=!/etc/bettercnc/kiosk-disabled
+
+[Service]
+User=@USER@
+WorkingDirectory=@HOME@
+PAMName=bettercnc-kiosk
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+Environment=BETTERCNC_INI=@INI@
+Environment=BETTERCNC_PROFILE=@PROFILE@
+# The kiosk keyboard (deploy/files/xkb): Ctrl, Alt, Super, F-keys and the
+# browser keys produce nothing, so no browser shortcut can be typed. cage's
+# keymap comes from these (libxkbcommon reads XKB_DEFAULT_*); the extra path
+# is searched before the system tree and only this session uses it.
+Environment=XKB_CONFIG_EXTRA_PATH=@REPO@/deploy/files/xkb
+Environment=XKB_DEFAULT_LAYOUT=@LAYOUT@
+Environment=XKB_DEFAULT_OPTIONS=bettercnc:kiosk
+ExecStart=/usr/bin/cage -d -- @REPO@/deploy/kiosk-session
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,122 @@
+# =============================================================================
+# test-rig-sim.hal - the test rig's HAL with the board replaced by simulation
+# =============================================================================
+#
+#   *** SIMULATOR ONLY. NEVER LOAD THIS ON THE MACHINE. ***
+#
+# Loaded in place of configs/test-rig/test-rig.hal by the INI that
+# sim/make_sim_ini.py derives from configs/test-rig/test-rig.ini (it changes
+# [HAL]HALFILE and [DISPLAY]DISPLAY and adds [SIM]; every other key is the
+# rig's own). What is kept from test-rig.hal, and what replaces the board:
+#
+#   kept        trivkins, motmod at [EMCMOT]SERVO_PERIOD, the estop_latch chain,
+#               the tool-change loopback, the servo-thread function order
+#   replaced    hm2_eth stepgens  ->  motor-pos-cmd looped to motor-pos-fb
+#               (no steps, so SCALE and step timing are NOT exercised)
+#               hm2_eth link pins ->  sim/hm2_link_stub.py, same names
+#               the five switches ->  sim_home_switch, wired as PLAN-BUGUN
+#                                     Faz 5 plans them (X corrected)
+#
+# Switch positions are INVENTED for the simulator and say nothing about the rig,
+# whose travel is unmeasured (PLAN-BUGUN Faz 4). They are in motor units, and
+# every motor starts at 0 when LinuxCNC starts, i.e. between its switches, on
+# the side homing searches toward.
+# =============================================================================
+
+
+# =============================================================================
+# LOADS
+# =============================================================================
+
+loadrt [KINS]KINEMATICS
+loadrt [EMCMOT]EMCMOT servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS
+loadrt estop_latch
+
+# One simulated switch per physical switch on the rig (docs/DURUM.md:69-80).
+# sim_home_switch: a negative home_pos is a switch on the negative side, which
+# reads TRUE at or below it; a positive one on the positive side
+# (reference/linuxcnc/src/hal/components/sim_home_switch.comp).
+loadrt sim_home_switch names=sim-x-min,sim-x-max,sim-y-min,sim-y-max,sim-z-top
+
+# Stand-in for the board's link-health pins (see the script's docstring).
+loadusr -Wn hm2_7i92.0 python3 [SIM]LINK_STUB
+
+
+# =============================================================================
+# THREADS
+# =============================================================================
+# Same order as test-rig.hal, with the switches where hm2 read was (inputs
+# first) and nothing where hm2 write was.
+
+addf sim-x-min                         servo-thread
+addf sim-x-max                         servo-thread
+addf sim-y-min                         servo-thread
+addf sim-y-max                         servo-thread
+addf sim-z-top                         servo-thread
+addf motion-command-handler            servo-thread
+addf motion-controller                 servo-thread
+addf estop-latch.0                     servo-thread
+
+
+# =============================================================================
+# JOINTS - position loopback in place of the stepgens
+# =============================================================================
+# The emcmot.0N.enable signals are kept so halcmd shows the same names as on
+# the rig; nothing reads them here.
+
+newsig emcmot.00.enable bit
+net emcmot.00.enable <= joint.0.amp-enable-out
+net motor.00.pos joint.0.motor-pos-cmd => joint.0.motor-pos-fb sim-x-min.cur-pos sim-x-max.cur-pos
+
+newsig emcmot.01.enable bit
+net emcmot.01.enable <= joint.1.amp-enable-out
+net motor.01.pos joint.1.motor-pos-cmd => joint.1.motor-pos-fb sim-y-min.cur-pos sim-y-max.cur-pos
+
+newsig emcmot.02.enable bit
+net emcmot.02.enable <= joint.2.amp-enable-out
+net motor.02.pos joint.2.motor-pos-cmd => joint.2.motor-pos-fb sim-z-top.cur-pos
+
+
+# =============================================================================
+# SWITCHES - as PLAN-BUGUN Faz 5 plans them, not as test-rig.hal has them
+# =============================================================================
+# On the rig these nets are still commented out, and homing there would search
+# forever. Here they are connected, so homing can be exercised. A simulated
+# switch reads TRUE when pressed, like `.in_not` on the rig.
+#
+# X: gpio.021 (left, minimum) is home + negative limit, gpio.020 (right,
+#    maximum) the positive limit - the corrected mapping, PLAN-BUGUN Faz 5.
+# Y: which of gpio.022 / gpio.023 is the minimum is UNKNOWN (Y DIR fault).
+#    The simulator assumes Y is wired like X.
+# Z: gpio.024, top only: home + positive limit. No bottom switch.
+
+setp sim-x-min.home-pos -10.0
+setp sim-x-max.home-pos 145.0
+setp sim-y-min.home-pos -10.0
+setp sim-y-max.home-pos 145.0
+setp sim-z-top.home-pos   5.0
+
+net x-home-limit sim-x-min.home-sw => joint.0.home-sw-in joint.0.neg-lim-sw-in
+net x-max-limit  sim-x-max.home-sw => joint.0.pos-lim-sw-in
+net y-home-limit sim-y-min.home-sw => joint.1.home-sw-in joint.1.neg-lim-sw-in
+net y-max-limit  sim-y-max.home-sw => joint.1.pos-lim-sw-in
+net z-home-limit sim-z-top.home-sw => joint.2.home-sw-in joint.2.pos-lim-sw-in
+
+
+# =============================================================================
+# ESTOP CHAIN - identical to test-rig.hal: GUI only, watchdog as fault source
+# =============================================================================
+# Kept identical on purpose: after a software estop the rig stays in
+# ESTOP_RESET, because iocontrol.0.user-enable-out is not in this chain, and
+# the UI's reset logic is written for that.
+
+net user-enable   iocontrol.0.user-request-enable => estop-latch.0.reset
+net enable-latch  estop-latch.0.ok-out            => iocontrol.0.emc-enable-in
+net watchdog      hm2_7i92.0.watchdog.has_bit     => estop-latch.0.fault-in
+
+
+# =============================================================================
+# TOOL CHANGE LOOPBACK - identical to test-rig.hal
+# =============================================================================
+net tool-prep-loop   iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
+net tool-change-loop iocontrol.0.tool-change  => iocontrol.0.tool-changed

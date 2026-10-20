@@ -1,0 +1,7 @@
+# Installed by deploy/kiosk.sh as /etc/pam.d/bettercnc-kiosk.
+# Nobody types a password here: systemd opens a PAM session for the service's
+# User= (PAMName=bettercnc-kiosk) so that logind gives cage the seat and
+# XDG_RUNTIME_DIR. systemd runs account, setcred and session, not authenticate.
+@include common-auth
+@include common-account
+@include common-session

@@ -16,7 +16,7 @@ from helpers import ALL_SCREENS, all_html
 #: (prototype value, why it is wrong, repo citation)
 FORBIDDEN = [
     # 1 - input map was fabricated
-    ("gpio.025", "only gpio.020-024 exist as inputs", "docs/DURUM.md:73-80"),
+    ("gpio.025", "only gpio.020-024 are wired as inputs on the test rig", "docs/DURUM.md:73-80"),
     ("Acil stop zinciri</span>", "no estop input on the test rig", "docs/DURUM.md:69-80"),
     # 2 - axis numbers were ~50x wrong
     ("80.000 adım/mm", "X/Y scale is 833.300 / 823.500", "configs/test-rig/test-rig.ini"),

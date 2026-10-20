@@ -29,19 +29,20 @@ class DrivePower(str, enum.Enum):
     cannot restore it, and on a machine with no estop input software cannot even
     observe it.
 
-    docs/MERMER-GECIS.md:122 --
+    docs/MERMER-GECIS.md:139 --
         "Acil stop surucu ve ig mili gucunu donanimsal kesmeli. LinuxCNC'nin
          haberi olmasi iyidir ama yazilim guvenlik fonksiyonu degildir.
-         Pi/PC coksede makine durmali."
+         Pi/PC cokse bile makine durmali."
     """
 
     CUT = "cut"          # chain open, drives dead
     LIVE = "live"        # chain closed, drives powered
     UNKNOWN = "unknown"  # no hardware estop input: LinuxCNC cannot know
 
-    @property
-    def safe_to_move(self) -> bool:
-        return self is DrivePower.LIVE
+    # Deliberately no "safe to move" helper here. Whether motion is allowed is
+    # EstopState.blocks_motion, which lets UNKNOWN through (the test rig has no
+    # input to report LIVE). A DrivePower-only rule cannot see software_disabled
+    # and would disagree with it.
 
 
 class EstopState(NamedTuple):
@@ -147,7 +148,9 @@ class JointHoming(NamedTuple):
     axis: str
     phase: HomingPhase
     sequence: int          # [JOINT_n]HOME_SEQUENCE, from the INI
-    ignore_limits: bool    # HOME_IGNORE_LIMITS
+    #: HOME_IGNORE_LIMITS. None = the INI value is unreadable
+    #: (configmodel.AxisConfig.home_ignore_limits); never coerce that to False.
+    ignore_limits: Optional[bool]
     search_vel: float      # sign gives the search direction
 
     @property
@@ -226,38 +229,76 @@ class LinkHealth(NamedTuple):
     """
 
     connected: bool
+    #: None = the pin could not be read. That is unknown, never zero.
     packet_error_total: Optional[int]
     watchdog_has_bit: Optional[bool]
     io_error: Optional[bool]
-    servo_period_ms: float
+    #: [EMCMOT]SERVO_PERIOD in ms. None = the INI does not give one; the UI
+    #: shows "—" rather than a default.
+    servo_period_ms: Optional[float]
 
     HAL_PACKET_ERROR_TOTAL = "hm2_7i92.0.packet-error-total"
     HAL_WATCHDOG_HAS_BIT = "hm2_7i92.0.watchdog.has_bit"
     HAL_IO_ERROR = "hm2_7i92.0.io_error"
 
     @property
+    def unreadable(self) -> List[str]:
+        """The indicators whose pin could not be read, in the operator's
+        words (the HAL names are in the link rows, viewmodel.link_panel)."""
+        out: List[str] = []
+        if self.packet_error_total is None:
+            out.append("kayıp paket sayısı")
+        if self.watchdog_has_bit is None:
+            out.append("kart bağlantısı")
+        if self.io_error is None:
+            out.append("iletişim hatası")
+        return out
+
+    @property
     def healthy(self) -> bool:
+        """Connected, every counter read, and none showing a fault.
+
+        A counter that could not be read is unknown, not clean: reporting
+        such a link as healthy would present an unmeasured value as measured.
+        """
         return (
             self.connected
+            and not self.unreadable
             and not self.watchdog_has_bit
             and not self.io_error
-            and (self.packet_error_total or 0) == 0
+            and self.packet_error_total == 0
         )
 
     @property
     def problems(self) -> List[str]:
+        """Each problem in the operator's words, with what to do.
+
+        Not "watchdog bit" or "io_error": the person at the machine needs a
+        cause they can check and the button to press (2026-10-20). Both
+        faults stop the machine and are cleared by «Yazılım sıfırla»
+        (LinuxCncAdapter._clear_link_faults); the reset also unhomes.
+        """
         out: List[str] = []
         if not self.connected:
-            out.append("Karta bağlantı yok.")
-        if self.watchdog_has_bit:
+            out.append("Kart bağlantısının durumu okunamıyor — kartla iletişim bilinmiyor.")
+        elif self.unreadable:
+            # Without a connection every counter is unreadable, and the line
+            # above already says why.
             out.append(
-                "Watchdog ısırdı — sürücü karta yazmayı bıraktı. Makine durdu."
+                "Okunamayan gösterge: {} — kartla iletişimin sağlığı bilinmiyor.".format(
+                    ", ".join(self.unreadable)
+                )
             )
-        if self.io_error:
-            out.append("io_error — kalıcı iletişim hatası, elle sıfırlanmalı.")
+        if self.watchdog_has_bit or self.io_error:
+            out.append(
+                "Kartla bağlantı koptu — makine durduruldu. Ethernet kablosunu ve "
+                "kartın beslemesini kontrol edin, sonra «Yazılım sıfırla»ya basın. "
+                "Ardından referansı yeniden alın."
+            )
         if (self.packet_error_total or 0) > 0:
             out.append(
-                "{} paket kaybı sayıldı.".format(self.packet_error_total)
+                "Kartla iletişimde {} paket kayboldu. Sayı artmaya devam ederse "
+                "Ethernet kablosunu ve bağlantısını kontrol edin.".format(self.packet_error_total)
             )
         return out
 
@@ -308,6 +349,11 @@ class MdiEntry(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+#: The start block, and the reason motion controls are off, while LinuxCNC's
+#: status cannot be read (MachineState.status_known is False).
+STATUS_UNKNOWN_BLOCK = "Makine durumu bilinmiyor — LinuxCNC durumu okunamıyor."
+
+
 class MachineState(NamedTuple):
     estop: EstopState
     homing: HomingState
@@ -322,6 +368,14 @@ class MachineState(NamedTuple):
     program_running: bool
     program_progress: float
     message: str
+    #: False when the adapter could not read LinuxCNC's status at all
+    #: (LinuxCncAdapter._status_unreadable). The fields LinuxCNC's status
+    #: would have filled (positions, wcs, feed_override_pct, the homing
+    #: phases, software_disabled, the program fields) are then placeholders,
+    #: not readings, and the view shows "—" or "bilinmiyor" for them. Drive
+    #: power and the link come from HAL pins, read separately, so they keep
+    #: their own meaning.
+    status_known: bool = True
 
     # -- the program-start gate ---------------------------------------------
 
@@ -331,13 +385,24 @@ class MachineState(NamedTuple):
 
         Order matters: the most fundamental reason comes first, so the UI can
         show `start_blocks[0]` as the headline.
+
+        While the status is unknown, the software-estop and unhomed reasons
+        are left out: they would be read off placeholders.
         """
         blocks: List[str] = []
         if self.estop.drive_power is DrivePower.CUT:
             blocks.append("Sürücü gücü donanımsal kesildi.")
-        if self.estop.software_disabled:
+        if not self.status_known:
+            blocks.append(STATUS_UNKNOWN_BLOCK)
+        elif self.estop.software_disabled:
             blocks.append("Makine yazılımda devre dışı (acil stop).")
-        if not self.homing.all_homed:
+        if not self.homing.joints:
+            # all_homed is False for an empty set, so start stays blocked; the
+            # message must say why rather than list no axes.
+            blocks.append(
+                "Referans durumu bilinmiyor: config'de eklem ([JOINT_n]) tanımlı değil."
+            )
+        elif self.status_known and not self.homing.all_homed:
             axes = ", ".join(j.axis for j in self.homing.unhomed)
             blocks.append(
                 "Referans alınmadı: {}. Sıra: {}.".format(
@@ -354,13 +419,22 @@ class MachineState(NamedTuple):
 
     @property
     def can_jog(self) -> bool:
-        """Jogging is allowed unhomed - that is how you find the switches."""
-        return not self.estop.blocks_motion and self.link.connected
+        """Jogging is allowed unhomed - that is how you find the switches.
+
+        Not while the status is unknown: whether the machine is enabled is
+        then itself unknown."""
+        return (
+            self.status_known
+            and not self.estop.blocks_motion
+            and self.link.connected
+        )
 
     @property
     def status_label(self) -> str:
         if self.estop.drive_power is DrivePower.CUT:
             return "ACİL STOP"
+        if not self.status_known:
+            return "DURUM BİLİNMİYOR"
         if self.estop.software_disabled:
             return "DEVRE DIŞI"
         if self.homing.any_homing:
@@ -373,7 +447,7 @@ class MachineState(NamedTuple):
 
     @property
     def status_severity(self) -> Severity:
-        if self.estop.blocks_motion:
+        if self.estop.blocks_motion or not self.status_known:
             return Severity.ERROR
         if not self.homing.all_homed or not self.link.healthy:
             return Severity.WARN

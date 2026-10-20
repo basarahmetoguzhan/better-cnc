@@ -1,20 +1,23 @@
 # test-rig — Phase 1.5 config
 
 Draft LinuxCNC configuration for the small 3-axis DIY router used to prove the
-Pi + Zhulong control chain before the marble machine.
+PC + Zhulong control chain before the marble machine (a Windows laptop booted from the
+LinuxCNC 2.9.10 live USB, amd64 PREEMPT_RT kernel — not a Pi; see docs/DURUM.md).
 
 ---
 
-## 🛑 Still UNTESTED — but the board side is now verified
+## 🟡 Runs and jogs — Y DIR fault, scale, travel, switch nets and homing still to do
 
-**Updated 2026-08-05.** The board has been detected and fully interrogated. Five of the
-eight original assumptions are **resolved from the dumps**; three remain, and all three
-are about the *machine*, not the controller.
+**Updated 2026-10-18.** The board has been detected and fully interrogated, and the config
+has been run: `hm2_eth` loads cleanly, the machine enables, all three axes jog — Y in one
+direction only, an open DIR fault (docs/DURUM.md). Five of the eight original assumptions
+were resolved from the dumps and a sixth (A7, polarity) by hand; A6 is resolved for X and Z
+but open for Y, and A5 is open — both about the *machine*, not the controller.
 
 | | |
 |---|---|
 | **Board side** | ✅ **VERIFIED** — prefix, module inventory, stepgen mapping, IO numbers, clock |
-| **Machine side** | ❌ **UNVERIFIED** — travel limits, homing directions, sensor-to-end, switch polarity |
+| **Machine side** | 🟡 **PARTLY VERIFIED** — all three axes jog (Y one way only — DIR fault open); switch locations and polarity (`.in_not`) verified by hand. Still unverified: scale, travel limits, homing directions, Y's + end |
 
 Dumps this is based on, both in `docs/board-dumps/`:
 
@@ -40,14 +43,20 @@ What actually changed:
 | IO pins | 51 (3 × 17) | **34 (2 × 17)** |
 | Connectors | P1, TB1, TB2, TB3 | **P2 (IO 0–16), P1 (IO 17–33)** |
 | Clock Low | 33 MHz (assumed) | **100 MHz** |
-| Load path | uncertain | **clean exact-match, Outcome A** |
+| Load path | uncertain | **clean `7I92` branch (4-character match, `hm2_eth.c:1183`), Outcome A** |
 
 The 34-pin geometry means docs 03 and 04, and parts of 08, described a board we do not
 have. They are corrected/superseded rather than deleted — see the docs index.
 
-### The first run must still be with the motors mechanically UNCOUPLED
+### First run — done
 
-Nothing about the config has been executed. Take the belts off, or unbolt the motors.
+The config has been run (docs/DURUM.md): `hm2_eth` loads cleanly (0 packet errors in a
+10 s check), the machine enables, all three axes jog (Y one way only — see above). The motors are
+now coupled to the mechanics (docs/PLAN-BUGUN.md:397), so the protections listed below no
+longer apply: `SCALE` is unverified, Y's direction is unknown and no limits are wired, and a
+wrong value now drives the gantry, not a bare shaft. Until docs/PLAN-BUGUN.md phases 1–4
+pass, jog in short, slow moves with a hand on the power switch. The plan was to run it first
+with the motors uncoupled, for these reasons:
 
 - A wrong `SCALE` spins a motor, not a gantry into its frame.
 - A wrong direction sign is something you *observe* rather than something that breaks a
@@ -64,8 +73,10 @@ arm's reach.**
 
 Worth noting though: with `num_encoders=0` the board now offers **9 more GPIO-capable
 pins** at IO 25–33, so on this machine a hardware estop input is no longer physically
-impossible — see A6 below and OPEN-QUESTIONS B2. It would need the encoder terminals'
-front-end characterised first.
+impossible — see OPEN-QUESTIONS B2 and docs/10. It would need the encoder terminals'
+front-end characterised first (ohmmeter, before any 24 V device is connected). Wiring the
+estop into the drive-power chain, so it works even if the controller dies, remains the
+better answer (see the estop section of `test-rig.hal`).
 
 ---
 
@@ -84,8 +95,9 @@ front-end characterised first.
 - **30 INI variable references** in the HAL — all resolve.
 - **Board facts** cross-checked against both dumps and against `hm2_eth.c:1183-1192`.
 
-Internally consistent and correct about the board. **Not yet proven against the
-machine.**
+Internally consistent and correct about the board, and it runs: loads, enables, jogs all
+three axes — Y one way only (docs/DURUM.md). **Scale, travel, switch nets and homing are
+not yet proven.**
 
 ---
 
@@ -139,10 +151,10 @@ the channel count are ignored, so 8 `x`'s is harmless.
 
 ---
 
-## Assumptions — 5 resolved, 3 open
+## Assumptions — 6 resolved, 1 partly open, 1 open
 
 ```bash
-grep -rn 'ASSUMPTION:' configs/test-rig/     # 7 markers, 3 questions
+grep -rn 'ASSUMPTION:' configs/test-rig/     # 7 markers (+3 lines quoting this grep): 3 travel (A5), 3 homing directions (stay until homing is proven), 1 HAL switch mapping (PLAN-BUGUN phase 5)
 ```
 
 ### ✅ A1 — Board IP `10.10.10.10` — RESOLVED
@@ -160,7 +172,8 @@ name at `hm2_eth.c:1487`.
 Geometry: `num_ioport_connectors = 2`, `pins_per_connector = 17`, connectors named `P2`
 and `P1` (`hm2_eth.c:1187-1190`). The IDROM agrees — *"Number of IO Ports: 2"*, *"Width of
 one I/O port: 17"* (`readhmid:15-16`) — so the strict checks in `hm2_read_idrom()` pass
-and the board loads on the **clean exact-match path**. That is Outcome A of docs/02, not
+and the board loads cleanly on hm2_eth's own `7I92` branch (a 4-character match,
+`hm2_eth.c:1183`, not the 7i96 exact-match). That is Outcome A of docs/02, not
 the fallback we were braced for.
 
 Fixed in one place: `[HOSTMOT2]BOARD`. The HAL indirects through it, exactly as designed.
@@ -198,9 +211,11 @@ StepGen 3-5 IO 10-15                   -> disabled by num_stepgens=3
 Order is **Step then Dir, ascending** — *not* the Dir-before-Step order docs/03 found in
 the stock 7i96 data. One more reason that document does not apply here.
 
-Still worth a physical check before coupling: the dump proves which FPGA pin carries which
-signal; it cannot prove the vendor wired AXIS 0's terminals to those pins rather than
-crossing them.
+Physically confirmed since: jogging drives AXIS 0 = X, AXIS 1 = Y, AXIS 2 = Z
+(docs/DURUM.md:115, docs/PLAN-BUGUN.md:82) — the axis blocks are not swapped. The exception is
+Y's direction, which does not change — Y+ and Y− move the same way (active DIR fault,
+docs/DURUM.md:12); where the DIR path fails — board terminal, cable or driver — is not yet
+measured (docs/PLAN-BUGUN.md phase 1).
 
 ### ✅ A8 — FPGA clock — RESOLVED, and our suspicion was misplaced
 
@@ -248,7 +263,7 @@ Z uses the opposite sign convention: homes at the top, so travel is negative
 **Resolves it:** measure. Widen the soft limits, jog each axis slowly end to end, read the
 travel with a rule, then set these to measured-minus-margin. Blocker **T1** in docs/07.
 
-### ❌ A6 — Which sensor is at which end — OPEN (but the IO numbers are now certain)
+### 🟡 A6 — Which sensor is at which end — RESOLVED for X and Z by hand; Y's + end waits on the Y DIR fault
 
 `test-rig.ini:429` (X), `:491` (Y), `:538` (Z), `test-rig.hal:255+`
 
@@ -264,10 +279,16 @@ silkscreen maps straight onto global IO numbers, as docs/08 hypothesised:
 | 19 | `OUT 2` | `hm2_7i92.0.gpio.019.out` |
 | 20–24 | the 5 isolated inputs | `hm2_7i92.0.gpio.0NN.in` |
 
-**What is still unverified:** which physical end of which axis each sensor is bolted to.
-The dumps describe the FPGA; they say nothing about the frame.
+**Verified by hand since** (docs/DURUM.md:69-82): `gpio.020` = X right, `gpio.021` = X left,
+`gpio.022` = Y rear, `gpio.023` = Y front, `gpio.024` = Z top; Z bottom has no switch. With
+X+ = right and Z+ = up, `gpio.020` is the X **maximum** end — not the home/minimum end the
+commented-out HAL plan gives it (docs/PLAN-BUGUN.md, "X limit ataması ters") — and
+`gpio.024` is the Z **+** end. Still unknown: which of Y rear/front is the + end, until Y's
+DIR fault is fixed (docs/PLAN-BUGUN.md phases 1–2). The dumps describe the FPGA; the frame
+side was answered by triggering each switch by hand.
 
-**Resolves it:** halmeter, machine powered but **not enabled**, push each switch by hand:
+**To re-check** (after any rewiring): halmeter, machine powered but **not enabled**, push
+each switch by hand:
 ```bash
 halrun -I
 halcmd: loadrt hostmot2 debug_modules=1
@@ -277,7 +298,7 @@ halcmd: loadusr halmeter pin hm2_7i92.0.gpio.020.in
 ```
 Record for each of the five: which switch moves it, and in which direction.
 
-### ❌ A7 — Switch polarity: `.in` vs `.in_not` — OPEN
+### ✅ A7 — Switch polarity: `.in` vs `.in_not` — RESOLVED: `.in_not`
 
 `test-rig.hal:240-253`
 
@@ -285,11 +306,19 @@ The inputs are opto-isolated. **An optocoupler input stage commonly inverts**, s
 read TRUE when the switch is *open*. LinuxCNC inverts an input by choosing the negated pin,
 not a parameter — every pin has both `.in` and `.in_not` (`ioport.c:250`, `:263`).
 
-**This is why the switch nets are commented out.** Wrong polarity means LinuxCNC believes
-an axis is permanently on its limit — or, worse, believes it never is.
+**This is why the switch nets were commented out at first.** Wrong polarity means LinuxCNC
+believes an axis is permanently on its limit — or, worse, believes it never is. Polarity is
+now known; the nets stay commented out until docs/PLAN-BUGUN.md phase 5, because Y's + end
+is unknown and the planned X mapping in the HAL is backwards (`gpio.020` is the X maximum
+end).
 
-**Resolves it:** same halmeter session as A6. Use whichever pin reads **FALSE** when the
-axis is clear.
+**Resolved (docs/DURUM.md:71), by triggering each switch by hand:** every input reads
+`.in` = TRUE at idle and FALSE when pressed, so HAL uses **`.in_not`**. GRBL's `$5 = 0`
+(docs/07, T3) supports — does not prove — that these are normally-open switches; if so, a
+broken wire reads as "not pressed": the "never on its limit" failure above, which nothing
+detects — check the switches before relying on them. `.in_not` is a fact about
+*this* rig's switches, not machine-independent: the NC series chain planned for the marble
+machine (docs/01-machine-survey.md) would read the opposite way.
 
 ---
 
@@ -297,8 +326,8 @@ axis is clear.
 
 | Value | Source |
 |---|---|
-| `SCALE` X 833.300, Y 823.500, Z 1250.000 | The machine's own GRBL EEPROM, empirically calibrated. `docs/board-dumps/grbl-eeprom-2026-08-03.json`, analysed in docs/07. All positive because `$3 = 0`. |
-| `MAX_ACCELERATION = 10.0` | GRBL `$120`–`$122 = 10`. Same units in both systems, no conversion (docs/06 Trap 4). Known to work. |
+| `SCALE` X 833.300, Y 823.500, Z 1250.000 | The machine's own GRBL EEPROM, empirically calibrated under GRBL. `docs/board-dumps/grbl-eeprom-2026-08-03.json`, analysed in docs/07. All positive because `$3 = 0`. **Not yet verified under LinuxCNC + TB6560** — the microstep setting may differ from the original drivers' (docs/DURUM.md:88, docs/09 T5); checked in docs/PLAN-BUGUN.md phase 3. |
+| `MAX_ACCELERATION = 10.0` | GRBL `$120`–`$122 = 10` — an untouched GRBL **factory default**, not a tuned value (docs/07 §2, docs/DURUM.md:94-96). Same units in both systems, no conversion (docs/06 Trap 4). Known to work only in the sense that the machine has run with it; its real capacity is unmeasured. |
 | `steplen`/`stepspace` 10000 ns, `dirsetup`/`dirhold` 50000 ns | TB6560 datasheet, docs/09. GRBL has no equivalent settings, so these could not have come from the EEPROM. Verified to fit the register range at 100 MHz. |
 | `FERROR = 0.050` / `MIN_FERROR = 0.005` | What every upstream hm2-stepper sample uses — `7i96s.ini:117-118`, identically in `7i93.ini`, `3x20-small.ini`, `4i65.ini`. |
 | `HOME_IGNORE_LIMITS = YES` | Required because home and limit share one switch. `ini-homing.adoc:174`. |
@@ -332,15 +361,31 @@ limit silently caps it) and `STEPGEN_MAX_VEL` (to stay ~20 % above).
 
 ## Suggested order of work
 
-Board-side steps are done. What remains:
+*Updated 2026-10-18.* Board-side steps are done, and so are the hand switch map (A6 for
+X/Z, A7) and the first jog of all three axes (docs/DURUM.md). The remaining work follows
+**[docs/PLAN-BUGUN.md](../../docs/PLAN-BUGUN.md)**, phases 1–9; each phase has a gate that
+must pass before the next:
 
-1. **halmeter on `gpio.020`–`024`**, pushing switches by hand → resolves **A6**, **A7**.
-2. **Uncomment the switch nets** in `test-rig.hal`, using whichever of `.in` / `.in_not`
-   step 1 established.
-3. **Motors uncoupled**, command each stepgen individually → confirms **A4** physically.
-4. **Jog each axis end to end and measure** → resolves **A5**.
-5. Only now couple the mechanics, and home for the first time.
-6. *(Optional, no longer blocking)* Scope a step pulse → fully closes **A8**.
+1. **Y DIR fault** — Y+ and Y− move the same way; find where the DIR signal is lost
+   (board terminal, cable or driver).
+2. **Direction map** — once Y reverses, jog it and record which way is Y+ → closes the Y
+   part of **A6**.
+3. **Scale check** — jog a known distance and measure; `SCALE` came from GRBL and is not
+   yet verified under LinuxCNC/TB6560.
+4. **Travel** — very slowly, hand on the power switch. No switch is wired, and the soft
+   limits do not protect an unhomed axis: until homing, LinuxCNC only bounds a jog to ±(full
+   range) around the current position (`command.c:153-174`), so you stop the axis yourself.
+   Jog X and Y until they touch each switch, Z down from the top switch only until close
+   to the mechanical stop (no bottom switch); leave 2–3 mm margin → resolves **A5**.
+5. **Switch nets** — uncomment them with `.in_not`, X mapping corrected (`gpio.021` → home +
+   negative limit, `gpio.020` → positive limit), Y per step 2.
+6. **Homing** — first attempt; it has never been tried.
+7. **Soft limits** — prove that a move beyond them is refused.
+8. **Dry run** — a first G-code program end to end, Z above the work.
+9. **Persist** — write the measured values into the INI and drop their markers, commit,
+   and check that the live-USB persistence survives a reboot.
+
+*(Optional, no longer blocking)* Scope a step pulse → fully closes **A8**.
 
 > **Before that first homing attempt**, read `ini-homing.adoc:46`: starting homing on the
 > wrong side of a home switch, *combined with `HOME_IGNORE_LIMITS`*, leads to a hard crash.
@@ -351,7 +396,9 @@ Board-side steps are done. What remains:
 
 ## Status
 
-**Board: VERIFIED. Machine: UNVERIFIED. Config: not yet run.**
+**Board: VERIFIED. Config: runs — loads cleanly, enables, all three axes jog. Machine:
+partly verified — switch map and polarity by hand. Open: Y DIR fault (Y moves one way
+only); scale, travel, switch nets and homing not yet done.** *(2026-10-18)*
 
 | ID | Assumption | Status | Resolved by |
 |---|---|---|---|
@@ -360,6 +407,6 @@ Board-side steps are done. What remains:
 | A3 | Module inventory | ✅ resolved — 6 StepGen, 3 QCount, 1 PWM, 1 SSerial | `readhmid:25-97` |
 | A4 | stepgen 00/01/02 → X/Y/Z | ✅ resolved — StepGen N = AXIS N | `readhmid:108-119`, `printpd:29-88` |
 | A5 | Travel 150/150/50 mm | ❌ open | measure with a rule |
-| A6 | Sensor-to-end mapping | ❌ open — IO numbers now certain, ends not | halmeter |
-| A7 | Switch polarity | ❌ open | halmeter |
+| A6 | Sensor-to-end mapping | 🟡 X and Z resolved by hand; Y's + end waits on the Y DIR fault | switches triggered by hand + jog directions, `docs/DURUM.md:69-82` |
+| A7 | Switch polarity | ✅ resolved — idle TRUE, pressed FALSE → `.in_not` | switches triggered by hand, `docs/DURUM.md:71` |
 | A8 | FPGA clock | ✅ resolved — 100 MHz, self-consistent | `readhmid:17-18, :68` |
