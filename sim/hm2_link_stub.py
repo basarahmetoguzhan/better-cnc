@@ -16,16 +16,34 @@ Same names, types and directions as the driver creates on the rig:
 Fault injection, from `sim/sim.sh halcmd ...`:
 
     setp hm2_7i92.0.packet-error-total 7   # link errors counted
-    setp hm2_7i92.0.io_error 1             # driver I/O error flag
-    sets watchdog TRUE                     # watchdog bite: has_bit is on the
+    setp hm2_7i92.0.io_error 1             # driver I/O error flag, by hand
+    sets watchdog TRUE                     # a bite by hand: has_bit is on the
                                            # `watchdog` net, which trips the
                                            # estop latch, as on the rig
-    setp hm2_7i92.0.sim-link-down 1        # the link stays down: has_bit is
-                                           # set again every few ms, so a
-                                           # reset cannot hold (cable still out)
+    setp hm2_7i92.0.sim-link-down 1        # the cable is out: what the real
+                                           # driver does, below
+    setp hm2_7i92.0.sim-link-down 0        # the cable is back
 
-The UI's «Yazılım sıfırla» clears has_bit and io_error itself with halcmd
-(adapter.LinuxCncAdapter._clear_link_faults), as on the rig.
+What the real driver does on a cable pull, as this stub plays it
+(reference/linuxcnc/src/hal/drivers/mesa-hostmot2/, audit 2026-10-21):
+
+  - after packet_error_limit misses the driver sets io_error, and nothing
+    else (hm2_eth.c:874-883); from then on it reads and writes nothing
+    (hostmot2.c, watchdog.c:38), so has_bit stays 0, the estop latch does
+    not trip and LinuxCNC goes on saying ON. The board's own watchdog bit
+    meanwhile and dropped the outputs.
+  - io_error cleared while the cable is still out: back within a few
+    servo periods (sim-link-down keeps setting it).
+  - io_error cleared with the cable back: the next read finds the bite the
+    board recorded and raises has_bit (watchdog.c:48-51) - now the latch
+    trips. Clearing has_bit is what resets the board (watchdog.c:259-271).
+
+The UI's «Yazılım sıfırla» plays the recovery itself with halcmd
+(adapter.LinuxCncAdapter.software_estop_reset): ESTOP first, io_error
+cleared, the has_bit that follows cleared, unhome, reset, ON. The first
+version of this stub held has_bit instead of io_error - the opposite of the
+driver - and the recovery it passed in sim/ would have done nothing on the
+rig with the machine ON.
 
 Loaded by sim/test-rig-sim.hal with `loadusr -Wn hm2_7i92.0`. Exits on the
 SIGTERM that `halcmd unload all` sends when LinuxCNC shuts down.
@@ -49,14 +67,19 @@ def main() -> int:
     comp.newparam("sim-link-down", hal.HAL_BIT, hal.HAL_RW)
     comp.ready()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    bite_recorded = False   # the board's watchdog bit while unreachable
     while True:
         if comp["sim-link-down"]:
-            # The real watchdog bites again within its timeout (5 ms by
-            # default, watchdog.c:172) when the link is still down.
-            comp["watchdog.has_bit"] = 1
+            # hm2_eth.c:883, within packet_error_limit misses (5 ms at 1 kHz).
+            comp["io_error"] = 1
+            bite_recorded = True
             time.sleep(0.005)
         else:
-            time.sleep(0.1)
+            if bite_recorded and not comp["io_error"]:
+                # The first read after the clear sees the bite (watchdog.c:48-51).
+                comp["watchdog.has_bit"] = 1
+                bite_recorded = False
+            time.sleep(0.005)
 
 
 if __name__ == "__main__":

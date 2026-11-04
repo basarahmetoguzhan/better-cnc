@@ -1,5 +1,5 @@
 # Installed by deploy/kiosk.sh as /etc/systemd/system/bettercnc-kiosk.service.
-# @USER@ @HOME@ @REPO@ @INI@ @PROFILE@ @LAYOUT@ are filled in at install; do not edit
+# @USER@ @HOME@ @REPO@ @INI@ @PROFILE@ @LAYOUT@ @TZ@ are filled in at install; do not edit
 # the installed copy, re-run `deploy/kiosk.sh install` instead.
 #
 # cage on tty1 runs deploy/kiosk-session: no desktop behind it, no window
@@ -9,8 +9,11 @@
 [Unit]
 Description=better-cnc kiosk: LinuxCNC + operator UI on tty1
 Documentation=file://@REPO@/deploy/README.md
-After=systemd-user-sessions.service plymouth-quit-wait.service network-online.target
-Wants=network-online.target
+# No network-online.target: the kiosk needs no network (the UI and the boot
+# screen are on 127.0.0.1; NetworkManager brings the board link up on its
+# own), and waiting for it is 30-60 s of black screen on a laptop with a
+# remembered Wi-Fi out of range (audit 2026-10-21).
+After=systemd-user-sessions.service plymouth-quit-wait.service
 Conflicts=getty@tty1.service
 After=getty@tty1.service
 ConditionKernelCommandLine=!bettercnc.kiosk=0
@@ -37,6 +40,9 @@ Environment=BETTERCNC_PROFILE=@PROFILE@
 # is searched before the system tree and only this session uses it.
 Environment=XKB_CONFIG_EXTRA_PATH=@REPO@/deploy/files/xkb
 Environment=XKB_DEFAULT_LAYOUT=@LAYOUT@
+# The one wall clock on screen (alarm times) in the shop's zone: a live USB
+# runs on UTC otherwise (audit 2026-10-21). `kiosk.sh install --tz`.
+Environment=TZ=@TZ@
 Environment=XKB_DEFAULT_OPTIONS=bettercnc:kiosk
 ExecStart=/usr/bin/cage -d -- @REPO@/deploy/kiosk-session
 Restart=always

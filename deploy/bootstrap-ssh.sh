@@ -19,11 +19,13 @@ if [ "$(id -u)" = 0 ]; then
   exit 1
 fi
 
-sudo apt-get update
-sudo apt-get install -y openssh-server rsync curl
-
+# Order matters (audit 2026-10-21): Debian starts sshd the moment the
+# package is installed, with password login on. So the keys are fetched and
+# the key-only config written FIRST; if the keys cannot be had, nothing has
+# been opened. Debian's sshd_config includes sshd_config.d/*.conf first, and
+# the first value sshd reads for a key wins.
 keys="$(curl -fsSL "https://github.com/$GITHUB_USER.keys")"
-[ -n "$keys" ] || { echo "GitHub'dan anahtar gelmedi" >&2; exit 1; }
+[ -n "$keys" ] || { echo "GitHub'dan anahtar gelmedi; sshd kurulmadı" >&2; exit 1; }
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys
@@ -33,17 +35,26 @@ while IFS= read -r key; do
   grep -qxF "$key" ~/.ssh/authorized_keys || echo "$key" >> ~/.ssh/authorized_keys
 done <<< "$keys"
 
-# Debian's sshd_config includes sshd_config.d/*.conf first, and the first
-# value sshd reads for a key wins.
+sudo install -d -m 0755 /etc/ssh/sshd_config.d
 sudo tee /etc/ssh/sshd_config.d/10-bettercnc.conf >/dev/null <<'EOF'
 # deploy/bootstrap-ssh.sh: key login only - the live USB password is public.
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 EOF
+
+sudo apt-get update
+sudo apt-get install -y openssh-server rsync curl
 sudo sshd -t
 sudo systemctl enable ssh
 sudo systemctl restart ssh
+# The effective value as sshd parses the whole configuration (our drop-in
+# through the Include), not just our file.
+if ! sudo sshd -T 2>/dev/null | grep -qi '^passwordauthentication no$'; then
+  echo "UYARI: sshd hâlâ şifreyle giriş kabul ediyor — ssh'ı durduruyorum: sudo systemctl stop ssh" >&2
+  sudo systemctl stop ssh
+  exit 1
+fi
 
 echo
 echo "=== better-cnc: SSH hazır ==="

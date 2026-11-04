@@ -231,8 +231,15 @@ class Session:
 ADAPTERS = ("mock", "linuxcnc")
 
 
-def build_session(profile_key: str = "test-rig", adapter_kind: str = "mock") -> Session:
-    profile = load_profile(profile_key)
+def build_session(
+    profile_key: str = "test-rig", adapter_kind: str = "mock", ini_path: Optional[str] = None
+) -> Session:
+    """`ini_path` replaces the profile's INI: the kiosk passes the INI
+    LinuxCNC was started with (deploy/bettercnc-display), so the UI never
+    describes one machine while LinuxCNC drives another. The profile is
+    built from it (load_profile), not merely pointed at it: its SOFT_LIMITS,
+    travel and switch facts come from the INI too."""
+    profile = load_profile(profile_key, ini_path)
     validate_profile(profile)
     config = load_machine_config(profile)
     adapter: MachineAdapter
@@ -402,6 +409,17 @@ def supervise(
         sleep(SUPERVISE_EVERY_S)
 
 
+def read_startup_note(path: Optional[str]) -> str:
+    """The first line of `path`, or "" (no file, empty, unreadable)."""
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.readline().strip()
+    except OSError:
+        return ""
+
+
 def serve(
     profile: str = "test-rig",
     host: str = "127.0.0.1",
@@ -410,11 +428,18 @@ def serve(
     boot_url: Optional[str] = None,
     exit_if_lost_s: Optional[float] = None,
     exit_reason_file: Optional[str] = None,
+    ini_path: Optional[str] = None,
+    startup_note_file: Optional[str] = None,
 ) -> Optional[int]:
     """Run the server until Ctrl-C (None) or, with `exit_if_lost_s`, until
-    supervise() ends it (EXIT_LINUXCNC_LOST)."""
-    Handler.session = build_session(profile, adapter_kind)
+    supervise() ends it (EXIT_LINUXCNC_LOST). `startup_note_file`: a line
+    the kiosk left about why the control system last stopped, shown as the
+    UI comes up (deploy/kiosk-session)."""
+    Handler.session = build_session(profile, adapter_kind, ini_path)
     Handler.boot_url = boot_url
+    note = read_startup_note(startup_note_file)
+    if note:
+        Handler.session.adapter.note_startup(note)
     httpd = ThreadingHTTPServer((host, port), Handler)
     sys.stderr.write(
         "better-cnc UI · profil={} · http://{}:{}/\n".format(profile, host, port)
@@ -424,8 +449,16 @@ def serve(
     if exit_if_lost_s is not None:
         session = Handler.session
 
+        def stop() -> None:
+            # Marked BEFORE the shutdown: serve_forever returns as soon as it
+            # is asked, and the main thread raced this thread to the return
+            # value - exit 0 instead of EXIT_LINUXCNC_LOST about a third of
+            # the time with a real ThreadingHTTPServer (audit, 2026-10-21).
+            ended["why"] = "linuxcnc lost"
+            httpd.shutdown()
+
         def watch() -> None:
-            ended["why"] = supervise(session, httpd.shutdown, exit_if_lost_s, exit_reason_file)
+            supervise(session, stop, exit_if_lost_s, exit_reason_file)
 
         threading.Thread(target=watch, name="bettercnc-supervise", daemon=True).start()
     try:
@@ -449,6 +482,12 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument(
+        "--ini",
+        default=None,
+        metavar="FILE",
+        help="the machine INI, in place of the profile's (the kiosk passes LinuxCNC's)",
+    )
+    ap.add_argument(
         "--boot-url",
         default=None,
         help="kiosk mode: the page goes here when the UI stops answering (deploy/)",
@@ -464,6 +503,12 @@ def main(argv: Optional[list] = None) -> int:
         "--exit-reason-file",
         default=None,
         help="kiosk mode: write why the UI exited here, for the boot screen",
+    )
+    ap.add_argument(
+        "--startup-note-file",
+        default=None,
+        metavar="FILE",
+        help="kiosk mode: show the line in FILE (why the control system last stopped) at start",
     )
     screens = [s[0] for s in VM.SCREENS]
     ap.add_argument(
@@ -500,14 +545,15 @@ def _run(ap: argparse.ArgumentParser, args: argparse.Namespace, screens: list) -
                     args.dump, ", ".join(screens)
                 )
             )
-        session = build_session(args.profile, args.adapter)
+        session = build_session(args.profile, args.adapter, args.ini)
         vm = session.view(args.dump)
         sys.stdout.write(R.render_page(vm, _read_static("app.css"), _read_static("app.js")))
         return 0
 
     code = serve(
         args.profile, args.host, args.port, args.adapter, args.boot_url,
-        args.exit_if_linuxcnc_lost, args.exit_reason_file,
+        args.exit_if_linuxcnc_lost, args.exit_reason_file, args.ini,
+        args.startup_note_file,
     )
     return code or 0
 

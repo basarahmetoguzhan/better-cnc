@@ -16,6 +16,11 @@
 #   BETTERCNC_LOST_EXIT_S       exit when LinuxCNC is gone or half gone this
 #                               long (3; deploy/README.md "Süreler")
 #   BETTERCNC_EXIT_REASON_FILE  where the UI writes why it exited (none)
+#   BETTERCNC_LAST_STOP_FILE    why the control system last stopped; shown
+#                               as the UI comes up (none)
+#   BETTERCNC_INI       the machine INI the UI describes; else the one in
+#                       the `-ini` argument LinuxCNC gives, its `-kiosk`
+#                       twin mapped back to the machine's own file
 set -u
 
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,14 +28,26 @@ REPO="$(dirname "$DEPLOY_DIR")"
 PROFILE="${BETTERCNC_PROFILE:-test-rig}"
 PORT="${BETTERCNC_UI_PORT:-8080}"
 
+# The INI the UI describes must be the one LinuxCNC runs. Before 2026-10-21
+# the profile's default was used whatever `kiosk.sh install --ini` said.
+INI="${BETTERCNC_INI:-}"
+if [ -z "$INI" ]; then
+  while [ $# -gt 1 ]; do
+    if [ "$1" = -ini ]; then INI="$2"; break; fi
+    shift
+  done
+fi
+case "$INI" in
+  *-kiosk.ini) base="${INI%-kiosk.ini}.ini"; [ -f "$base" ] && INI="$base" ;;
+esac
+
 # Ready means LinuxCNC's status reads. Each try is a fresh process: a poll
 # that fails before LinuxCNC is up spoils its process for good
 # (adapter.POLL_SPOILED), so the UI's own process must not be the one to try.
-for i in $(seq 1 30); do
-  if timeout 5 python3 -c 'import linuxcnc; linuxcnc.stat().poll()' >/dev/null 2>&1; then
-    break
-  fi
-  if [ "$i" = 30 ]; then
+# A deadline, not a try count: a try that hangs counts its 5 s too.
+deadline=$((SECONDS + 30))
+until timeout 5 python3 -c 'import linuxcnc; linuxcnc.stat().poll()' >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
     echo "bettercnc-display: LinuxCNC'nin durumu 30 s içinde okunamadı" >&2
     exit 1
   fi
@@ -39,11 +56,17 @@ done
 
 args=(--profile "$PROFILE" --adapter linuxcnc --host 127.0.0.1 --port "$PORT"
       --exit-if-linuxcnc-lost "${BETTERCNC_LOST_EXIT_S:-3}")
+if [ -n "$INI" ]; then
+  args+=(--ini "$INI")
+fi
 if [ -n "${BETTERCNC_BOOT_URL:-}" ]; then
   args+=(--boot-url "$BETTERCNC_BOOT_URL")
 fi
 if [ -n "${BETTERCNC_EXIT_REASON_FILE:-}" ]; then
   args+=(--exit-reason-file "$BETTERCNC_EXIT_REASON_FILE")
+fi
+if [ -n "${BETTERCNC_LAST_STOP_FILE:-}" ]; then
+  args+=(--startup-note-file "$BETTERCNC_LAST_STOP_FILE")
 fi
 export PYTHONPATH="$REPO/ui${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1

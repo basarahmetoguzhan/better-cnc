@@ -21,6 +21,7 @@ deploy/kiosk-session writes the status file; this only reads it.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
 import time
@@ -60,7 +61,7 @@ def ui_is_up(ui_url: str, timeout: float = UI_CHECK_TIMEOUT_S) -> bool:
     try:
         with urllib.request.urlopen(ui_url.rstrip("/") + "/healthz", timeout=timeout) as r:
             return r.status == 200 and json.loads(r.read().decode("utf-8")).get("ok") is True
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException):
         return False
 
 
@@ -108,12 +109,19 @@ Acil durumda makinenin gücünü kesin.</div>
       ev.stopPropagation();
     }}
   }}, true);
+  // One navigation at a time: a second replace() would restart the first.
+  // Tried again after 5 s in case the first was stopped (Esc stops a load).
+  var leaving = false;
   function tick() {{
     fetch("/api/status")
       .then(function (r) {{ return r.json(); }})
       .then(function (s) {{
         box.textContent = s.text;
-        if (s.ui_up) location.replace(ui);
+        if (s.ui_up && !leaving) {{
+          leaving = true;
+          location.replace(ui);
+          setTimeout(function () {{ leaving = false; }}, 5000);
+        }}
       }})
       .catch(function () {{
         box.textContent = "Başlatma ekranının sunucusu cevap vermiyor.";
@@ -128,8 +136,8 @@ def render(status_text: str, ui_url: str) -> str:
     # json.dumps of a URL cannot hold "</script": the URL comes from our own
     # command line, and "/" is not escaped, so refuse it rather than escape.
     ui_json = json.dumps(ui_url)
-    if "</" in ui_json:
-        raise ValueError("ui_url must not contain '</': {!r}".format(ui_url))
+    if "</" in ui_json or "<!--" in ui_json:
+        raise ValueError("ui_url must not contain '</' or '<!--': {!r}".format(ui_url))
     return _PAGE.format(text=escape(status_text), ui_json=ui_json)
 
 

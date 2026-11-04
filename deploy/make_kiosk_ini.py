@@ -57,9 +57,9 @@ def main(argv) -> int:
     try:
         with open(source, "r", encoding="utf-8") as fh:
             text = fh.read()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         # One line for the kiosk's boot screen, not a traceback.
-        sys.stderr.write("{} okunamadı: {}\n".format(source, exc.strerror or exc))
+        sys.stderr.write("{} okunamadı: {}\n".format(source, getattr(exc, "strerror", None) or exc))
         return 1
     out = kiosk_path(source)
     tmp = out + ".tmp"

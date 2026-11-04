@@ -55,6 +55,7 @@ from html.parser import HTMLParser
 from helpers import ALL_SCREENS, REPO_ROOT, UI_DIR, view
 
 from bettercnc import app
+from bettercnc.capabilities import Capability
 from bettercnc import render as R
 from bettercnc.adapter import LinuxCncAdapter, MockAdapter
 from bettercnc.profiles import PROFILES, load_profile
@@ -268,10 +269,17 @@ class TestClickRouting(unittest.TestCase):
         self.assertIn("var gap = Date.now() - lastOk;", js)
         self.assertIn("BAĞLANTI YOK", js)
         self.assertIn("Komutun makineye ulaşıp ulaşmadığı bilinmiyor.", js)
+        # The overlay keeps an estop button: it is the rig's one estop, and the
+        # server acts on it without its lock even while slow (audit 2026-10-21).
+        lost = js[js.index("function showLost("):js.index("function connectionOk(")]
+        self.assertIn('estop.className = "lost-estop"', lost)
+        self.assertIn('action: "software_estop"', lost)
+        self.assertIn("ULAŞTIĞI BİLİNMİYOR", lost)
         # a 500 is a failure too, not JSON to swap in
         self.assertIn("if (!r.ok) throw", js)
         css = read_static("app.css")
         self.assertIn(".lost {", css)
+        self.assertIn(".lost-estop {", css)
 
     def test_every_request_has_a_time_limit_and_one_poll_is_in_flight(self):
         """Found 2026-10-20: without a limit, a server that hangs (a send to
@@ -296,9 +304,12 @@ class TestClickRouting(unittest.TestCase):
         )
         with open(os.path.join(REPO_ROOT, "deploy", "README.md"), encoding="utf-8") as fh:
             readme = fh.read()
-        for name in values:
+        for name, ms in values.items():
             with self.subTest(name=name):
-                self.assertIn("`{}`".format(name), readme)
+                # the row's value, not just its name (audit 2026-10-21)
+                row = next(r for r in readme.splitlines() if r.startswith("| `{}`".format(name)))
+                shown = row.split("|")[2].strip().replace(",", ".").split()[0]
+                self.assertEqual(float(shown), int(ms) / 1000.0, row)
 
     def test_kiosk_boot_url_reaches_the_page_only_when_given(self):
         vm = view("test-rig", "kontrol")
@@ -596,7 +607,8 @@ class TestMainHandsOffToServe(unittest.TestCase):
         self.assertEqual(
             recorder.calls,
             [{"profile": "test-rig", "host": "127.0.0.1", "port": 8080, "adapter_kind": "mock",
-              "boot_url": None, "exit_if_lost_s": None, "exit_reason_file": None}],
+              "boot_url": None, "exit_if_lost_s": None, "exit_reason_file": None,
+              "ini_path": None, "startup_note_file": None}],
         )
 
     def test_flags_reach_serve_and_the_port_is_an_int(self):
@@ -605,16 +617,66 @@ class TestMainHandsOffToServe(unittest.TestCase):
         run = run_main(
             ["--profile", "marble", "--host", "0.0.0.0", "--port", "9090", "--adapter", "linuxcnc",
              "--boot-url", "http://127.0.0.1:8079/", "--exit-if-linuxcnc-lost", "3",
-             "--exit-reason-file", "/tmp/r.txt"]
+             "--exit-reason-file", "/tmp/r.txt", "--ini", "/tmp/m.ini",
+             "--startup-note-file", "/tmp/n.txt"]
         )
         self.assertEqual(run.code, 0)
         self.assertEqual(
             recorder.calls,
             [{"profile": "marble", "host": "0.0.0.0", "port": 9090, "adapter_kind": "linuxcnc",
               "boot_url": "http://127.0.0.1:8079/", "exit_if_lost_s": 3.0,
-              "exit_reason_file": "/tmp/r.txt"}],
+              "exit_reason_file": "/tmp/r.txt", "ini_path": "/tmp/m.ini",
+              "startup_note_file": "/tmp/n.txt"}],
         )
         self.assertIsInstance(recorder.calls[0]["port"], int)
+
+    def test_why_the_control_system_last_stopped_reaches_the_first_screen(self):
+        """The boot screen's "durdu" line lives RESTART_S (5 s) and the page
+        stays on the UI through a restart (BOOT_MS 10 s): the operator never
+        saw it (audit 2026-10-21). The new UI shows it as it comes up."""
+        note = os.path.join(tempfile.mkdtemp(), "last-stop.txt")
+        self.addCleanup(__import__("shutil").rmtree, os.path.dirname(note))
+        self.assertEqual(app.read_startup_note(note), "")          # no file yet
+        self.assertEqual(app.read_startup_note(None), "")
+        with open(note, "w", encoding="utf-8") as fh:
+            fh.write("12:03 — LinuxCNC'nin bir parçası çalışmıyor (milltask)\nsecond line\n")
+        self.assertEqual(app.read_startup_note(note),
+                         "12:03 — LinuxCNC'nin bir parçası çalışmıyor (milltask)")
+        session = app.build_session("test-rig", "mock")
+        session.adapter.note_startup(app.read_startup_note(note))
+        snap = session.adapter.snapshot()
+        self.assertEqual(snap.message,
+                         "Kontrol sistemi yeniden başlatıldı — önceki durma: 12:03 — "
+                         "LinuxCNC'nin bir parçası çalışmıyor (milltask)")
+        self.assertEqual(snap.alarms[0].text, snap.message)
+        self.assertEqual(snap.alarms[0].source, "kiosk")
+
+    def test_ini_replaces_the_profiles_ini(self):
+        """The kiosk passes the INI LinuxCNC runs (deploy/bettercnc-display);
+        before 2026-10-21 the UI read the profile's default whatever
+        `kiosk.sh install --ini` said."""
+        import shutil
+        src = os.path.join(REPO_ROOT, "configs", "test-rig", "test-rig.ini")
+        copy = os.path.join(tempfile.mkdtemp(), "elsewhere.ini")
+        self.addCleanup(shutil.rmtree, os.path.dirname(copy))
+        shutil.copy(src, copy)
+        session = app.build_session("test-rig", "mock", copy)
+        self.assertEqual(session.profile.ini_path, copy)
+        self.assertEqual(app.build_session("test-rig", "mock").profile.ini_path, src)
+        # The profile is BUILT from the INI, not merely pointed at it (review
+        # 2026-10-21): a copy with the travel measured must say so everywhere.
+        with open(copy, encoding="utf-8") as fh:
+            text = fh.read()
+        with open(copy, "w", encoding="utf-8") as fh:
+            fh.write(text.replace("ASSUMPTION:", "VERIFIED:").replace("MUST BE MEASURED", "MEASURED")
+                     .replace("PROVISIONAL", "SETTLED"))   # iniload.PROVISIONAL_MARKERS, all three
+        measured = app.build_session("test-rig", "mock", copy)
+        self.assertFalse(session.profile.travel_measured)
+        self.assertTrue(measured.profile.travel_measured)
+        self.assertTrue(measured.config.soft_limits_configured)
+        self.assertIn(copy, measured.profile.capability(Capability.SOFT_LIMITS).source)
+        with self.assertRaises(ValueError):
+            app.build_session("marble", "mock", copy)   # no INI to replace
 
     def test_a_non_positive_supervision_time_is_a_usage_error(self):
         recorder = _ServeRecorder(self)
@@ -797,6 +859,10 @@ class _Lost:
 
     def __init__(self, answers):
         self.answers = list(answers)
+        self.note = None
+
+    def note_startup(self, text):
+        self.note = text
 
     def linuxcnc_lost(self):
         return self.answers.pop(0) if self.answers else None
@@ -867,7 +933,12 @@ class TestSupervise(unittest.TestCase):
                     raise AssertionError("supervisor never stopped the server")
 
             def shutdown(self):
+                # serve_forever returns as soon as it is asked; this thread
+                # gets back to the supervisor only later. The exit code must
+                # not depend on which thread wins (audit 2026-10-21: it did,
+                # 0 instead of 3 about a third of the time).
                 released.set()
+                __import__("time").sleep(0.2)
 
             def server_close(self):
                 pass
@@ -875,16 +946,21 @@ class TestSupervise(unittest.TestCase):
         app.ThreadingHTTPServer = Stub
         original = app.build_session
 
-        def build(profile, kind):
-            session = original(profile, kind)
+        def build(profile, kind, ini_path=None):
+            session = original(profile, kind, ini_path)
             session.adapter = _Lost(["gone"] * 1000)
             return session
 
         self.addCleanup(setattr, app, "build_session", original)
         app.build_session = build
+        note = os.path.join(tempfile.mkdtemp(), "last-stop.txt")
+        self.addCleanup(__import__("shutil").rmtree, os.path.dirname(note))
+        with open(note, "w", encoding="utf-8") as fh:
+            fh.write("09:00 — test\n")
         with contextlib.redirect_stderr(io.StringIO()):
-            code = app.serve("test-rig", "127.0.0.1", 0, "mock", None, 0.05, None)
+            code = app.serve("test-rig", "127.0.0.1", 0, "mock", None, 0.05, None, None, note)
         self.assertEqual(code, app.EXIT_LINUXCNC_LOST)
+        self.assertEqual(app.Handler.session.adapter.note, "09:00 — test")
 
 
 class TestClientContact(unittest.TestCase):

@@ -494,14 +494,23 @@ PROFILES = {
 }
 
 
-def load_profile(key: str) -> MachineProfile:
+def load_profile(key: str, ini_path: Optional[str] = None) -> MachineProfile:
+    """`ini_path` builds the profile from that INI instead of its default:
+    every fact a profile derives from the INI (SOFT_LIMITS, travel, the
+    missing switches) then follows it, not just the path it cites. A profile
+    without an INI refuses one."""
     if key not in PROFILES:
         raise KeyError(
             "unknown machine profile {!r} - known: {}".format(
                 key, ", ".join(sorted(PROFILES))
             )
         )
-    return PROFILES[key]()
+    if ini_path is None:
+        return PROFILES[key]()
+    try:
+        return PROFILES[key](ini_path)
+    except TypeError:
+        raise ValueError("profile {!r} has no INI to replace".format(key)) from None
 
 
 def validate_profile(profile: MachineProfile) -> None:

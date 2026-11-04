@@ -2,7 +2,7 @@
 
 Retrofit of a 3-axis industrial marble CNC from a Windows controller to
 LinuxCNC on a PC — today an amd64 laptop booted from a LinuxCNC 2.9.10 PREEMPT_RT live USB
-(a Raspberry Pi 4/5 remains a possible future path; the Pi 3 was ruled out) — driving a
+(the marble machine's final controller is a Raspberry Pi 4, decided 2026-10-19; the Pi 3 was ruled out) — driving a
 **Zhulong V2.0** Ethernet motion board
 (a Mesa **7i92** derivative — Spartan-6 XC6SLX9, Micrel KSZ8851 PHY, `hm2_eth`,
 34 IO pins, HAL prefix `hm2_7i92.0`).
@@ -62,7 +62,7 @@ actually is, then [PLAN-BUGUN.md](PLAN-BUGUN.md) for what is left to do on the t
 | 08 | [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md) | Board pinout from the vendor's own annotated diagram — connectors, terminals, silkscreen. In Turkish. **Corrected 2026-08-05**: the 7i96 comparison table was the wrong family and is now a 7i92 comparison. Its connector observations were right and cross-check cleanly against the dumps. | **VERIFIED** (connectors) |
 | 09 | [09-tb6560-drivers.md](09-tb6560-drivers.md) | TB6560 stepper driver analysis — where `steplen`/`stepspace`/`dirsetup`/`dirhold` come from, and the 15 kHz STEP-frequency ceiling that caps axis velocity. In Turkish. | **DERIVED** |
 | **10** | [**10-7i92-pinout-verified.md**](10-7i92-pinout-verified.md) | ⭐ **The real pin map.** All 34 IO pins from `mesaflash --readhmid` and `--print-pd`: IO number, port (P2 = 0–16, P1 = 17–33), secondary function, vendor terminal, HAL pin name. Plus IDROM summary, module inventory, the GPIO budget (28 of 34 available), and a full account of the 7i96→7i92 correction. **Wire from this document.** | ✅ **VERIFIED** |
-| **11** | [11-ui-implementation.md](11-ui-implementation.md) | **Operator UI implementation.** Stack choice (Python stdlib + server-side HTML) and why; the data-driven capability model that renders absent features disabled rather than hidden; the LinuxCNC data boundary; what is mocked vs real; and a table of all **24 prototype facts corrected** with citations. Code in [ui/](../ui/), 808 tests, 99.5% coverage (2026-10-20). | **DERIVED**, run against a real LinuxCNC 2.9.9 in [sim/](../sim/README.md), not yet on the machine |
+| **11** | [11-ui-implementation.md](11-ui-implementation.md) | **Operator UI implementation.** Stack choice (Python stdlib + server-side HTML) and why; the data-driven capability model that renders absent features disabled rather than hidden; the LinuxCNC data boundary; what is mocked vs real; and a table of all **24 prototype facts corrected** with citations. Code in [ui/](../ui/), 842 tests, 99.5% coverage (2026-10-21). | **DERIVED**, run against a real LinuxCNC 2.9.9 in [sim/](../sim/README.md), not yet on the machine |
 | — | [../sim/README.md](../sim/README.md) | **The simulator.** Real LinuxCNC 2.9.9 in Docker on the Mac, arm64 like the Pi 4; the rig's own INI with the board, steps and switches simulated. The UI and the kiosk are tried there before the machine. In Turkish. | runs (2026-10-19) |
 | — | [../deploy/README.md](../deploy/README.md) | **Kiosk and remote access.** Power on → LinuxCNC → our UI, full screen, no way out to a desktop; the machine reached from the Mac over SSH (key only) instead of USB. In Turkish. | tried in [sim/](../sim/README.md); not yet installed on the machine |
 | — | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | **Blocker register** — B1–B7, three now closed (B2, B3, B4) and B5 downgraded to non-blocking, each with who answers it, what it blocks, and space for the dated answer. Answers are struck through, never deleted, so the decision history survives. In Turkish. Organised by *what it blocks*; [04](04-zhulong-board-hardware.md)'s Q-list covers overlapping ground organised by *how `readhmid` settles it*. | **DERIVED** |
@@ -123,8 +123,9 @@ indirects through it. Full account in [10](10-7i92-pinout-verified.md).
 
 **2. It is a genuine 7i92, not a clone pretending to be something.**
 The IDROM's declared geometry matches what the driver hardcodes for a 7i92 exactly, so
-`hm2_read_idrom()`'s strict checks pass and the board loads on the **clean exact-match
-path** — Outcome A of [02](02-board-bringup.md), not the `"??"` fallback we were braced
+`hm2_read_idrom()`'s strict checks pass and the board loads on **hm2_eth's own `7I92`
+branch** (a 4-character match, `hm2_eth.c:1183`; not the 7i96's 8-byte exact match)
+— Outcome A of [02](02-board-bringup.md), not the `"??"` fallback we were braced
 for, and not the hard abort we feared. The 7i92 is a bare 2 × DB25 breakout with no fixed
 module complement; the vendor supplied their own bitfile (6 StepGen, 3 QCount, 1 PWM,
 1 SSerial) and their own I/O front-end. That is what a 7i92 is *for*. Still: do not flash
@@ -237,7 +238,7 @@ rig must pass all nine gates before the marble machine (decision 2026-10-18).
    commanded and measured distance agree within 1 % on all three axes.
 4. **Measure travel** → resolves **A5**. Very slowly, hand on the power switch. No switch
    is wired, and the soft limits do not protect an unhomed axis (LinuxCNC only bounds the
-   jog to ±(full range) around the current position, `command.c:153-174`), so you stop it:
+   jog to ±(full range) around the current position, `command.c:154-175`), so you stop it:
    jog X and Y until they touch each switch, Z down from the top switch
    only until close to the mechanical stop (there is no bottom switch). Replace the assumed
    150/150/50 mm in the INI, leaving 2–3 mm margin.
@@ -277,8 +278,8 @@ against the wrong board family entirely.
 
 - **Source citations** are file-and-line into `reference/`, e.g.
   [hm2_eth.c:1319](../reference/linuxcnc/src/hal/drivers/mesa-hostmot2/hm2_eth.c#L1319).
-  All 58 such links were checked to resolve with in-range line numbers, and their content
-  anchors verified, as of the last edit. `reference/` is gitignored — re-clone with the
+  Every such link was checked to resolve with an in-range line number, and its content
+  anchor verified, as of the last edit. `reference/` is gitignored — re-clone with the
   commands in [00](00-upstream-reference-map.md) if it is missing.
 - **OBSERVED / INFERRED / UNVERIFIED** in [04](04-zhulong-board-hardware.md) distinguish
   photograph evidence from reasoning from guesswork. The distinction is enforced

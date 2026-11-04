@@ -41,12 +41,14 @@ cmd="${1:-}"; shift || true
 install_files() {
   need_root
   local user="${SUDO_USER:-}" ini="$REPO/configs/test-rig/test-rig.ini" profile=test-rig layout=tr
+  local tz=Europe/Istanbul
   while [ $# -gt 0 ]; do
     case "$1" in
       --user) user="$2"; shift 2 ;;
       --ini) ini="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
       --profile) profile="$2"; shift 2 ;;
       --layout) layout="$2"; shift 2 ;;
+      --tz) tz="$2"; shift 2 ;;
       *) die "bilinmeyen seçenek: $1" ;;
     esac
   done
@@ -56,6 +58,8 @@ install_files() {
   local home; home="$(getent passwd "$user" | cut -d: -f6)"
   [ -n "$home" ] || die "kullanıcı yok: $user"
   [ -f "$ini" ] || die "INI yok: $ini"
+  # glibc falls back to UTC for a zone it does not know, silently
+  [ -f "/usr/share/zoneinfo/$tz" ] || die "saat dilimi yok: $tz (bkz. /usr/share/zoneinfo)"
   case "$REPO" in "$home"/*) ;; *) echo "uyarı: repo $user kullanıcısının HOME'unda değil: $REPO" >&2 ;; esac
 
   echo "== paketler"
@@ -66,7 +70,7 @@ install_files() {
 
   echo "== dosyalar"
   sed -e "s|@USER@|$user|g" -e "s|@HOME@|$home|g" -e "s|@REPO@|$REPO|g" \
-      -e "s|@INI@|$ini|g" -e "s|@PROFILE@|$profile|g" -e "s|@LAYOUT@|$layout|g" \
+      -e "s|@INI@|$ini|g" -e "s|@PROFILE@|$profile|g" -e "s|@LAYOUT@|$layout|g" -e "s|@TZ@|$tz|g" \
       "$FILES/bettercnc-kiosk.service.in" > "$UNIT_PATH"
   install -m 0644 "$FILES/bettercnc-kiosk.pam" "$PAM_PATH"
   install -d -m 0755 "$(dirname "$POLICY_PATH")"
@@ -77,7 +81,7 @@ install_files() {
   install -d -m 0755 "$(dirname "$LOGIND_PATH")"
   install -m 0644 "$FILES/logind-bettercnc-kiosk.conf" "$LOGIND_PATH"
   install -d -m 0755 "$STATE"
-  printf 'USER=%s\nREPO=%s\nINI=%s\nPROFILE=%s\nLAYOUT=%s\n' "$user" "$REPO" "$ini" "$profile" "$layout" > "$STATE/kiosk.env"
+  printf 'USER=%s\nREPO=%s\nINI=%s\nPROFILE=%s\nLAYOUT=%s\nTZ=%s\n' "$user" "$REPO" "$ini" "$profile" "$layout" "$tz" > "$STATE/kiosk.env"
   systemctl daemon-reload
   systemd-analyze verify "$UNIT_PATH" || die "servis dosyası doğrulanamadı"
   echo "kuruldu, AÇILMADI. Açmak için: sudo deploy/kiosk.sh enable"
@@ -105,9 +109,18 @@ enable_kiosk() {
   systemctl set-default graphical.target
   systemctl enable "$UNIT"
   if [ "$now" = 1 ]; then
-    if [ -n "$dm" ]; then systemctl stop "$dm"; fi
-    systemctl start "$UNIT"
-    echo "kiosk tty1'de başladı"
+    if [ -n "$dm" ] && systemctl is-active --quiet "$dm"; then
+      # Stopping the desktop ends every terminal on it, this script with it,
+      # before the start line runs (audit 2026-10-21); a transient unit does
+      # the switch from outside any session.
+      systemd-run --quiet --collect --unit=bettercnc-kiosk-switch \
+        --description="better-cnc: masaüstünden kiosk'a geçiş" \
+        sh -c "systemctl stop '$dm' && systemctl start '$UNIT'"
+      echo "masaüstü kapatılıp kiosk tty1'de başlatılıyor (birkaç saniye)"
+    else
+      systemctl start "$UNIT"
+      echo "kiosk tty1'de başladı"
+    fi
   else
     echo "bir sonraki açılışta kiosk başlar (hemen için: enable --now)"
   fi
@@ -176,5 +189,5 @@ case "$cmd" in
   board-network) board_network "$@" ;;
   status) status ;;
   uninstall) uninstall ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,/^[^#]/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

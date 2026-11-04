@@ -343,6 +343,12 @@ class MachineAdapter(abc.ABC):
 
     profile: MachineProfile
 
+    def note_startup(self, text: str) -> None:
+        """Something the operator should know as the UI comes up - why the
+        control system last stopped (deploy/kiosk-session): the UI is back
+        before the boot screen had a chance to show it. Logged, and the
+        first message line."""
+
     @abc.abstractmethod
     def snapshot(self) -> MachineState:
         ...
@@ -482,6 +488,12 @@ class MockAdapter(MachineAdapter):
         self._feed = 100
 
     # -- reads ---------------------------------------------------------------
+
+    @_locked
+    def note_startup(self, text: str) -> None:
+        self._alarms.insert(0, AlarmEvent(_now(), "Kontrol sistemi yeniden başlatıldı — önceki durma: " + text,
+                                          "kiosk", Severity.WARN))
+        self._message = "Kontrol sistemi yeniden başlatıldı — önceki durma: " + text
 
     @_locked
     def snapshot(self) -> MachineState:
@@ -781,11 +793,25 @@ LINK_NOT_RESTORED = (
     "kartın beslemesini kontrol edip tekrar «Yazılım sıfırla»ya basın."
 )
 
+#: After io_error is cleared, how long the driver gets to report what it
+#: finds on the board. hm2_eth sets io_error, and only io_error, when the
+#: link drops (hm2_eth.c:883); while it is set the driver skips every read,
+#: so the board's own watchdog bite is not seen (watchdog.c:38). The read
+#: after the clear finds it and raises has_bit (watchdog.c:48-51) within a
+#: servo period or two - or io_error comes straight back when the cable is
+#: still out (5 misses at 1 kHz). 0.5 s is hundreds of either. Chosen.
+LINK_SETTLE_S = 0.5
+_LINK_POLL_S = 0.05
+
 #: How long one halcmd call may take before it counts as failed. halcmd
 #: answers in tens of milliseconds; it waits longer only while another
 #: process holds the HAL mutex. Chosen, not measured; 2 s keeps a reset from
 #: hanging on it while being far above any normal answer.
 HALCMD_TIMEOUT_S = 2.0
+
+
+class _LinkStillDown(Exception):
+    """io_error came back right after it was cleared: the cable is still out."""
 
 
 def _run_halcmd(args: List[str]) -> Tuple[bool, str]:
@@ -847,16 +873,31 @@ def _voluntary_switches(proc_root: str, pid: str) -> Optional[int]:
     return None
 
 
-#: A LinuxCNC loop that has not slept for this long is stuck. Task and
-#: iocontrol each sleep once per cycle ([TASK]CYCLE_TIME 10 ms, [EMCIO]
-#: CYCLE_TIME 100 ms on the rig), and every sleep is a voluntary context
-#: switch the kernel counts in /proc/PID/status; in sim/ on 2026-10-20 task
-#: counted ~87/s, iocontrol ~9/s, and a frozen task 0. Blocked in a lock or
-#: spinning in a loop, the count stops. 2 s is 200 task cycles and 20
-#: iocontrol cycles: no normal turn of either loop comes near it. This is the
-#: stand-in for task's own heartbeat (emc_nml.hh:1172, emctask.cc:739),
-#: which the Python binding does not export. Chosen; deploy/README.md
-#: "Süreler".
+def _cpu_ticks(proc_root: str, pid: str) -> Optional[int]:
+    """The process's CPU time, user + system clock ticks (/proc/PID/stat
+    fields 14 and 15, after the parenthesised comm), or None."""
+    try:
+        with open(os.path.join(proc_root, pid, "stat"), "r") as fh:
+            rest = fh.read().rsplit(")", 1)[1].split()
+        return int(rest[11]) + int(rest[12])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+#: A LinuxCNC loop that has neither slept nor worked for this long is stuck.
+#: Task and iocontrol each sleep once per cycle ([TASK]CYCLE_TIME 10 ms,
+#: [EMCIO] CYCLE_TIME 100 ms on the rig), and every sleep is a voluntary
+#: context switch the kernel counts in /proc/PID/status; in sim/ on
+#: 2026-10-20 task counted ~87/s, iocontrol ~9/s, and a frozen task 0.
+#: Task does not sleep while it has queued work - "eager", emctaskmain.cc:
+#: 3593 - which a long run of program lines can keep up; so its CPU time
+#: (/proc/PID/stat) counts as life too, and only a process that is doing
+#: nothing at all is stuck: blocked in a lock, or frozen. 2 s is 200 task
+#: cycles and 20 iocontrol cycles: no normal turn of either loop comes near
+#: it. This is the stand-in for task's own heartbeat (emc_nml.hh:1172,
+#: emctask.cc:739), which the Python binding does not export. Chosen;
+#: deploy/README.md "Süreler". Still invisible: a loop that keeps cycling
+#: while doing nothing useful.
 LOOP_STALL_S = 2.0
 
 #: Why the status is treated as lost while a loop is stuck: the status buffer
@@ -1038,13 +1079,18 @@ class LinuxCncAdapter(MachineAdapter):
             return value.raw.strip() if value is not None else None
 
         task = ini_raw("TASK", "TASK") or "milltask"
-        self._linuxcnc_processes = (
-            "linuxcncsvr",
+        #: The two loops judged for a stall (_stalled_loops).
+        self._loop_processes = (
             "linuxcnctask" if task == "emctask" else task,
             ini_raw("IO", "IO") or ini_raw("EMCIO", "EMCIO") or "io",
         )
-        #: name -> (switch count, when it last changed), for _stalled_loops.
-        self._loop_seen: Dict[str, Tuple[int, float]] = {}
+        #: Every process that must be there: the two loops, the NML server,
+        #: and rtapi_app, the uspace realtime process that runs motion and
+        #: the board driver (scripts/realtime.in). With rtapi_app gone the
+        #: status buffer still reads, so only the process list shows it.
+        self._linuxcnc_processes = ("linuxcncsvr",) + self._loop_processes + ("rtapi_app",)
+        #: name -> ((switches, cpu ticks), when they last changed), for _stalled_loops.
+        self._loop_seen: Dict[str, Tuple[Tuple[int, int], float]] = {}
         self._hal_component = self._open_hal_component()
 
     def _probe_status(self) -> None:
@@ -1079,6 +1125,11 @@ class LinuxCncAdapter(MachineAdapter):
 
     # -- reads ---------------------------------------------------------------
 
+    def note_startup(self, text: str) -> None:
+        self._alarms.insert(0, AlarmEvent(_now(), "Kontrol sistemi yeniden başlatıldı — önceki durma: " + text,
+                                          "kiosk", Severity.WARN))
+        self._message = "Kontrol sistemi yeniden başlatıldı — önceki durma: " + text
+
     def snapshot(self) -> MachineState:
         try:
             s = self._poll()
@@ -1086,8 +1137,38 @@ class LinuxCncAdapter(MachineAdapter):
             return self._status_unreadable(exc)
         errored = self._drain_errors()
         hal_values = self._read_hal()
+        self._stop_on_link_fault(s, hal_values)
         self._note_task_state(s.task_state, hal_values, errored)
         return self._map(s, hal_values)
+
+    def _stop_on_link_fault(self, s: Any, hal_values: Dict[str, Any]) -> None:
+        """A board link fault with the machine ON: send ESTOP.
+
+        The rig's HAL stops the machine on a watchdog bite (the `watchdog`
+        net into the estop latch, test-rig.hal: "a comms failure stops the
+        machine"). But a cable pull on the real driver raises io_error, and
+        only io_error (hm2_eth.c:883) - a parameter, which no net can carry -
+        and has_bit is not read while it is set (watchdog.c:38): the latch
+        never trips, LinuxCNC says ON, and the board's own watchdog has
+        already dropped the outputs, so any move would end in a following
+        error. This does for io_error what the net does for the bit, within
+        one snapshot (1 s), and reports it here and now as the link's loss
+        (LINK_LOST); the transition it causes is marked as the UI's own so
+        _note_task_state does not report it a second time, over whatever a
+        reset pressed in between had to say.
+        """
+        L = self._linuxcnc
+        if s.task_state != L.STATE_ON or not hal_values.get(LinkHealth.HAL_IO_ERROR):
+            # has_bit is the latch's: the `watchdog` net trips it within a
+            # servo period, long before this 1 Hz look could.
+            return
+        self._estop_sent = True
+        self._send().state(L.STATE_ESTOP)
+        self._alarms.insert(
+            0, AlarmEvent(_now(), LINK_LOST + " (iletişim hatası; yazılımdan durduruldu)",
+                          "hal", Severity.ERROR),
+        )
+        self._message = "{}. {}".format(LINK_LOST, LINK_ACTION)
 
     def _note_task_state(self, task_state: int, hal_values: Dict[str, Any], errored: bool) -> None:
         """Say so when LinuxCNC leaves ON and the UI did not cause it.
@@ -1506,18 +1587,30 @@ class LinuxCncAdapter(MachineAdapter):
         Homing survives: a software estop unhomes only joints with
         VOLATILE_HOME (emctask.cc:364 emcJointUnhome(-2), homing.c:316-323).
 
-        A lost board link is cleared first (_clear_link_faults): the hm2
-        watchdog's has_bit and the driver's io_error stay set until someone
-        clears them (watchdog.c:50-52, :259; hostmot2.c), and has_bit holds
-        the rig's estop latch open, so without this the reset could never
-        succeed and only a LinuxCNC restart would. Every joint is then
-        unhomed, as the board's step generators kept counting while it was
-        cut off (LINK_RESTORED). If the link is still bad, the watchdog bites
-        again within its timeout and the reset is refused below.
+        A lost board link is cleared first (_clear_link_faults): the driver's
+        io_error and the hm2 watchdog's has_bit stay set until someone clears
+        them (hm2_eth.c:883, watchdog.c:50-52, :259; hostmot2.c), and has_bit
+        holds the rig's estop latch open, so without this the reset could
+        never succeed and only a LinuxCNC restart would. On the real driver a
+        cable pull raises io_error alone and the latch does NOT trip: LinuxCNC
+        goes on saying ON (or OFF, after the following error of a move with
+        frozen feedback) while the board's own watchdog has cut the outputs.
+        So a link fault is looked for before "already ON", and the machine is
+        put in ESTOP first (the snapshot normally did that the second the
+        fault appeared, _stop_on_link_fault): clearing io_error makes the
+        driver read the board again, and the bite it finds there would trip
+        the latch in the middle of the reset otherwise. Every joint is then unhomed, as the board's
+        step generators kept counting while it was cut off (LINK_RESTORED).
+        If the link is still bad, io_error comes straight back, or the
+        watchdog bites again within its timeout, and the reset is refused.
         """
         L = self._linuxcnc
         s = self._poll()
-        if s.task_state == L.STATE_ON:
+        link = self._read_hal()
+        link_lost = bool(
+            link.get(LinkHealth.HAL_WATCHDOG_HAS_BIT) or link.get(LinkHealth.HAL_IO_ERROR)
+        )
+        if not link_lost and s.task_state == L.STATE_ON:
             self._message = "Makine zaten açık."
             return
         if self._running(s):
@@ -1526,12 +1619,22 @@ class LinuxCncAdapter(MachineAdapter):
                 "sıfırlama programı durdurur."
             )
             return
-        link = self._read_hal()
-        link_lost = bool(
-            link.get(LinkHealth.HAL_WATCHDOG_HAS_BIT) or link.get(LinkHealth.HAL_IO_ERROR)
-        )
         if link_lost:
-            why = self._clear_link_faults(link)
+            if s.task_state == L.STATE_ON:
+                # Normally the snapshot stopped it already (_stop_on_link_fault).
+                self._estop_sent = True  # ours: not a link loss to report
+                self._send().state(L.STATE_ESTOP)
+                self._wait()
+                s = self._poll()
+            try:
+                why = self._clear_link_faults(link)
+            except _LinkStillDown:
+                self._message = LINK_NOT_RESTORED
+                self._alarms.insert(
+                    0, AlarmEvent(_now(), "Kartla bağlantı kurulamadı: iletişim hatası sürüyor",
+                                  "hal", Severity.WARN),
+                )
+                return
             if why is not None:
                 self._message = (
                     "Kart bağlantısı sıfırlanamadı — LinuxCNC'yi yeniden başlatın. "
@@ -1550,6 +1653,10 @@ class LinuxCncAdapter(MachineAdapter):
                 0, AlarmEvent(_now(), "Kart bağlantısı sıfırlandı, referanslar silindi",
                               "hal", Severity.WARN),
             )
+            # The bite the driver read while clearing tripped the latch: a
+            # software ESTOP alone leaves the chain closed (ESTOP_RESET), a
+            # bite opens it (ESTOP), and only ESTOP_RESET closes it again.
+            s = self._poll()
         if s.task_state == L.STATE_ESTOP:
             self._send().state(L.STATE_ESTOP_RESET)
             s = self._wait_out_of_estop()
@@ -1577,6 +1684,13 @@ class LinuxCncAdapter(MachineAdapter):
         self._send().state(L.STATE_ON)
         self._wait()
         s = self._poll()
+        if s.task_state == L.STATE_ON:
+            # The stop this UI sent (software_estop, _stop_on_link_fault, the
+            # ESTOP above) is over: the next stop is not its own. Without this
+            # a reset pressed before a snapshot had seen the stop left the
+            # flag up, and the next real stop went unreported (review,
+            # 2026-10-21).
+            self._estop_sent = False
         if s.task_state != L.STATE_ON and link_lost:
             self._message = LINK_NOT_RESTORED
             return
@@ -1603,19 +1717,32 @@ class LinuxCncAdapter(MachineAdapter):
         )
 
     def _clear_link_faults(self, link: Dict[str, Any]) -> Optional[str]:
-        """Clear the board link's latched faults; None, or why it failed.
+        """Clear the board link's latched faults; None, or why halcmd failed.
+        Raises _LinkStillDown when io_error comes back after the clear: the
+        cable is still out.
 
-        io_error is a parameter, so setp clears it. has_bit is a pin, and on
-        the rig it is on the `watchdog` signal (test-rig.hal, ESTOP CHAIN),
-        where setp refuses it; so the signal it is on is looked up and
-        cleared with sets. Clearing has_bit is how the driver is told to
-        reset the board and pet the watchdog again (hostmot2.adoc:113-115,
+        io_error first: it is a parameter, so setp clears it, and while it is
+        set the driver reads nothing from the board. Then up to LINK_SETTLE_S
+        for what the next reads bring - has_bit, the bite the board recorded
+        while unreachable (watchdog.c:48-51), or io_error again. has_bit is a
+        pin, and on the rig it is on the `watchdog` signal (test-rig.hal,
+        ESTOP CHAIN), where setp refuses it; so the signal it is on is looked
+        up and cleared with sets. Clearing has_bit is how the driver is told
+        to reset the board and pet the watchdog again (hostmot2.adoc:113-115,
         watchdog.c:259-266).
         """
         if link.get(LinkHealth.HAL_IO_ERROR):
             ok, out = self._halcmd(["setp", LinkHealth.HAL_IO_ERROR, "0"])
             if not ok:
                 return out.strip() or "halcmd setp io_error"
+            deadline = self._clock() + LINK_SETTLE_S
+            while True:
+                self._sleep(_LINK_POLL_S)
+                link = self._read_hal()
+                if link.get(LinkHealth.HAL_IO_ERROR):
+                    raise _LinkStillDown()
+                if link.get(LinkHealth.HAL_WATCHDOG_HAS_BIT) or self._clock() >= deadline:
+                    break
         if link.get(LinkHealth.HAL_WATCHDOG_HAS_BIT):
             pin = LinkHealth.HAL_WATCHDOG_HAS_BIT
             ok, out = self._halcmd(["-s", "show", "pin", pin])
@@ -1629,24 +1756,32 @@ class LinuxCncAdapter(MachineAdapter):
 
     def _stalled_loops(self) -> List[str]:
         """LinuxCNC's looping processes - task and iocontrol - whose loop has
-        not slept for LOOP_STALL_S, judged by the kernel's count of their
-        voluntary context switches. linuxcncsvr is not judged: it waits on
-        events and counted 0/s when healthy (sim/, 2026-10-20). A missing
-        process is not "stalled": linuxcnc_lost() reports it as missing. The
-        first look at a process only records it."""
+        neither slept nor used CPU for LOOP_STALL_S, judged by the kernel's
+        counts of their voluntary context switches and CPU ticks (see
+        LOOP_STALL_S). linuxcncsvr and rtapi_app are not judged: linuxcncsvr
+        waits on events and counted 0/s when healthy (sim/, 2026-10-20), and
+        /proc/PID/status counts the main thread only, which in rtapi_app
+        idles while its realtime thread works. A missing process is not
+        "stalled": linuxcnc_lost() reports it as missing. The first look at a
+        process only records it."""
         table = _process_table(self._proc_root)
         if table is None:
             return []
         now = self._clock()
         stalled = []
-        for name in self._linuxcnc_processes[1:]:
-            counts = [
-                c for c in (_voluntary_switches(self._proc_root, pid) for pid in table.get(name, []))
-                if c is not None
-            ]
-            if not counts:
+        for name in self._loop_processes:
+            switches = ticks = 0
+            seen_any = False
+            for pid in table.get(name, []):
+                c = _voluntary_switches(self._proc_root, pid)
+                if c is None:
+                    continue
+                seen_any = True
+                switches += c
+                ticks += _cpu_ticks(self._proc_root, pid) or 0
+            if not seen_any:
                 continue
-            total = sum(counts)
+            total = (switches, ticks)
             seen = self._loop_seen.get(name)
             if seen is None or seen[0] != total:
                 self._loop_seen[name] = (total, now)
@@ -1868,6 +2003,7 @@ class LinuxCncAdapter(MachineAdapter):
             return
         self._jog_step = mm
 
+    @_refused_without_status
     def set_feed_override(self, pct: int) -> None:
         """Feed override in percent, sent as command.feedrate(scale) the way
         axis.py does (:2104-2111). Not command.set_feed_override, which only
@@ -1878,6 +2014,10 @@ class LinuxCncAdapter(MachineAdapter):
         does (:3353-3355). 0 % is a valid override (it holds the feed).
         """
         pct = int(pct)
+        # The guard's question first: a send to a stuck task spins 5 s, and
+        # the poll after an outage writes its own message, which must not
+        # cover this action's.
+        self._poll()
         if self._max_feed_pct is None:
             self._message = "Besleme değiştirilmedi — INI yok, besleme sınırı bilinmiyor."
             return

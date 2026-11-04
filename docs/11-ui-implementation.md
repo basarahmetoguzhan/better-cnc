@@ -19,8 +19,8 @@ note.
 | | |
 |---|---|
 | Stack | Python 3 stdlib only + server-side HTML |
-| Tests | 781, all passing, no expected failures, `make test` (732 UI + 49 in `scripts/test_grbl2ini.py`; 4 keymap tests run only where libxkbcommon is, e.g. `sim/sim.sh test`); also on arm64 + Python 3.13 in the simulator (`sim/sim.sh test`) |
-| Coverage | **99.6 %** (`make coverage`); `adapter.py` 99.0 % |
+| Tests | 842, all passing, no expected failures, `make test` (793 UI + 49 in `scripts/test_grbl2ini.py`; 4 keymap tests run only where libxkbcommon is, e.g. `sim/sim.sh test`); also on arm64 + Python 3.13 in the simulator (`sim/sim.sh test`) |
+| Coverage | **99.5 %** (`make coverage`); `adapter.py` 99.0 % |
 | Screens | 6, as the prototype: Kontrol / Program / Probing / Takımlar / Alarmlar / Makine |
 | Profiles | `test-rig` (verified) and `marble` (TODO placeholders) |
 | Prototype facts corrected | 24, table below |
@@ -61,9 +61,10 @@ assert 'data-capability="spindle"' in markup      # rendered
 assert 'data-enabled="0"' in tail_of_that_block   # disabled
 ```
 
-That is why `render.py` returns strings and `app.js` is about 100 lines that only
-forward clicks and swap `innerHTML`. The view logic stayed in Python because
-that is where it can be tested.
+That is why `render.py` returns strings and `app.js` is about 280 lines that
+forward clicks, swap `innerHTML` and watch the connection (overlay, time limits,
+the kiosk's boot hand-off). The view logic stayed in Python because that is
+where it can be tested.
 
 **What was rejected.** PyQt/QtVCP — LinuxCNC's own GUI toolkit, and the
 conventional choice — is hard to assert on headlessly and is not installed here.
@@ -279,19 +280,19 @@ is invalid, emcmodule.cc:278-284), `snapshot()` returns a state marked unknown
 `LinuxCNC'ye bağlantı yok — komut gönderilmedi.` when nothing was sent, or
 `LinuxCNC'ye bağlantı koptu — gönderilen komutun sonucu bilinmiyor.` once
 something had been (`program_stop` always sends `abort()` first). The outage
-and the recovery are each logged once. `software_estop`, the feed override and
-the jog step never poll, so they are not refused: the jog step only sets the UI's
-value, and the feed override and the estop are sent anyway. A send to a task that
+and the recovery are each logged once. `software_estop` and the jog step never
+poll, so they are not refused: the jog step only sets the UI's value, and the
+estop is sent anyway - it is the one estop this rig has. A send to a task that
 no longer answers can spin in emcSendCommand for up to 5 s holding the GIL
-(emcmodule.cc:209, :233-250); for the feed override that is under the session
-lock. Not measured.
+(emcmodule.cc:209, :233-250); that is why the feed override, a send too, is
+guarded like the rest since 2026-10-21. Not measured.
 
 ### What is mocked and what is real
 
 | Real (traced to a repo file) | Mocked (`MockAdapter`, the server default) |
 |---|---|
 | Board identity, IO count, clock — from `board-dumps/readhmid-*` | Axis positions (start at 0, a jog moves them at once) |
-| SCALE, velocity, accel, step timing, HOME_SEQUENCE, HOME_IGNORE_LIMITS, SERVO_PERIOD — read from `test-rig.ini` at runtime | Link health counters (0 / `sessiz` / `yok`), shown like readings |
+| SCALE, velocity, accel, step timing, HOME_SEQUENCE, HOME_IGNORE_LIMITS, SERVO_PERIOD — read from `test-rig.ini` at runtime | Link health counters (0 / `iyi` / `yok`), shown like readings |
 | Input map, polarity, Z asymmetry — `docs/DURUM.md:69-80` | Alarm log seed entries (`hm2_eth: 7i92 bulundu…`, `Üç stepgen aktif…`), stamped with the current time |
 | Kernel, NIC, host — `docs/DURUM.md:20-27` | Homing (completes instantly) |
 | Capability reasons and requirements — `docs/MERMER-GECIS.md` §2 | Program progress |
@@ -368,7 +369,7 @@ GET  /              full page
 GET  /api/render    re-render one screen (the 1 Hz poll)
 POST /api/action    an intent, then re-render
 GET  /api/state     the raw view model as JSON, for debugging
-GET  /healthz       {"ok": true}
+GET  /healthz       {"ok": true, "client_age_s": seconds since a browser last asked (null: never)}
 ```
 
 - **One lock, one exception.** `Session` runs every adapter call under one lock,
@@ -578,7 +579,15 @@ the rig's wiring as its default.
 
 **The reset** (`LinuxCncAdapter.software_estop_reset`):
 
-- already ON: nothing is sent (`Makine zaten açık.`);
+- a board link fault first (`io_error` or `has_bit` set; 2026-10-21): if the
+  machine is still ON, ESTOP is sent (normally the snapshot did that the
+  second the fault appeared, `_stop_on_link_fault`); `io_error` is cleared
+  with halcmd, then up to `LINK_SETTLE_S` (0.5 s) for what the driver's next
+  reads bring - `has_bit`, the bite the board recorded, cleared through its
+  signal, or `io_error` again, which means the cable is still out
+  (`LINK_NOT_RESTORED`, nothing else sent); every joint is unhomed; then the
+  reset below, and `LINK_RESTORED` on success;
+- already ON, no link fault: nothing is sent (`Makine zaten açık.`);
 - a program or MDI command running: refused, because ESTOP_RESET aborts it
   (emctask.cc:340-349) — defence in depth, since a program runs only in ON;
 - from ESTOP: ESTOP_RESET is sent, then the status is polled until LinuxCNC
@@ -671,9 +680,9 @@ the Makine screen with the HAL pin names shown:
 
 | Indicator | HAL pin |
 |---|---|
-| Paket kaybı | `hm2_7i92.0.packet-error-total` |
-| Watchdog | `hm2_7i92.0.watchdog.has_bit` |
-| io_error | `hm2_7i92.0.io_error` |
+| Kayıp paket | `hm2_7i92.0.packet-error-total` |
+| Kart bağlantısı (iyi / KOPTU) | `hm2_7i92.0.watchdog.has_bit` |
+| İletişim hatası (yok / VAR) | `hm2_7i92.0.io_error` |
 | Servo döngü | — (`[EMCMOT]SERVO_PERIOD` from the INI) |
 
 Unreadable pins render `—` in the warning colour, not `0` — "we could not read
@@ -864,8 +873,8 @@ Actions refuse as described under "How `LinuxCncAdapter` drives LinuxCNC".
 ## Tests
 
 ```bash
-make test          # 808 tests, everything incl. scripts/test_grbl2ini.py
-make coverage      # 99.6 %
+make test          # 842 tests, everything incl. scripts/test_grbl2ini.py
+make coverage      # 99.5 %
 ```
 
 `ui/tests/run_all.py` discovers both `ui/tests` and `scripts`, so the
@@ -874,14 +883,15 @@ failure.
 
 | File | Tests | Covers |
 |---|---|---|
-| `test_app_cli.py` | 26 | `main()` and `serve()` with a stub server (no socket is bound); `--dump` for every profile × screen, the same body the live server sends; exit 2 and the list of valid screens for an unknown or empty name; `python -m bettercnc.app --dump` in a subprocess; inline JSON cannot close its `<script>`; no file:line citations into production code in the server's files (`app.py`, `render.py` and their two test files) |
+| `test_app_cli.py` | 52 | `main()` and `serve()` with a stub server (no socket is bound); `--dump` for every profile × screen, the same body the live server sends; exit 2 and the list of valid screens for an unknown or empty name; `python -m bettercnc.app --dump` in a subprocess; inline JSON cannot close its `<script>`; no file:line citations into production code in the server's files (`app.py`, `render.py` and their two test files); the adapter choice, click routing, supervision and its exit code, client contact, the connection overlay and the kiosk flags |
+| `test_deploy.py` | 99 | `deploy/` and the kiosk: INI derivation, the boot screen server, the screen guard over the DevTools pipe (incl. the real pipe), the browser watch, the kiosk keymap through libxkbcommon (in the container), the rules the scripts must hold (SSH key-only, the session's stop path, timings in the README) |
 | `test_capabilities.py` | 26 | the never-hidden contract, per capability; profile completeness; TODO vs ABSENT |
 | `test_config_traceability.py` | 25 | every hardware number vs the INI, read with an independent parser |
 | `test_edge_cases.py` | 74 | edited, sparse and half-measured INIs (continuation lines, repeats, section names, empty values, HOME_IGNORE_LIMITS parsing, comment runs); measured travel reaching every screen and the profile; the status-unknown display; a wired estop input; status-label priority; link trouble reaching the gate; the adapter contract; the LinuxCNC citations re-checked against `reference/` |
 | `test_estop.py` | 27 | hardware/software separation at three levels |
 | `test_homing_gate.py` | 32 | the gate, order from config, the drift detector, and the docs read from disk |
-| `test_inputmap_and_link.py` | 46 | verified input map, Z asymmetry, `.in_not`, link health incl. unreadable counters and packet loss alone |
-| `test_linuxcnc_adapter.py` | 171 | `LinuxCncAdapter` against the fake: the exact command sequence of every action and that LinuxCNC (the fake) refused nothing; joint vs teleop jog, re-homing, the homing refusal, the estop channel, reset deadline and rig latch, program load/start/stop, feed ceiling, WCS, INI values flowing through, bounded waits, the status channel lost and every action under it; the fake checked against the binding when `reference/` is present |
+| `test_inputmap_and_link.py` | 48 | verified input map, Z asymmetry, `.in_not`, link health incl. unreadable counters and packet loss alone |
+| `test_linuxcnc_adapter.py` | 231 | `LinuxCncAdapter` against the fake: the exact command sequence of every action and that LinuxCNC (the fake) refused nothing; joint vs teleop jog, re-homing, the homing refusal, the estop channel, reset deadline and rig latch, program load/start/stop, feed ceiling, WCS, INI values flowing through, bounded waits, the status channel lost and every action under it, the board link lost and recovered as the real driver does it, LinuxCNC half gone or stuck; the fake checked against the binding when `reference/` is present |
 | `test_mdi_tools_adapter.py` | 76 | MDI entry/history; the shared gate (`_needs_homing`, `mdi_refusal`); probe-is-not-a-tool; `map_linuxcnc_state` (24 tests); the mock following the INI; the mock's own lock |
 | `test_prototype_corrections.py` | 14 | table-driven guard on all 24 corrections |
 | `test_server_and_iniload.py` | 53 | HTTP routes, malformed input, body limits, the request timeout, screen validation on POST; `Session` locking (the estop outside the lock, with a blocked jog); the status-unknown DRO; INI edge cases |
@@ -901,36 +911,41 @@ The fidelity tests (in `test_linuxcnc_adapter.py` and `test_edge_cases.py`) read
 and argument formats, stat attributes, joint dict keys, message type numbers, the
 `hal` functions, the `estop_latch` component and the rig's HAL wiring, the GIL in
 `wait_complete`, every refusal text the fake emits, and the LinuxCNC facts the code cites.
-They match content, not line numbers: a citation's line range is not checked. Without `reference/` those 18 tests skip and the rest still run.
+They match content, not line numbers: a citation's line range is not checked. Without `reference/` those 20 tests skip and the rest still run.
 
-### Coverage: 99.6 %
+### Coverage: 99.5 %
 
 ```
 module                   lines  covered      pct
 ------------------------------------------------
 bettercnc.capabilities      94       93    98.9%
-bettercnc.adapter          771      763    99.0%
-bettercnc.app              185      184    99.5%
-bettercnc.configmodel      187      186    99.5%
-bettercnc.render           500      499    99.8%
+bettercnc.bootpage          99       98    99.0%
+bettercnc.adapter         1027     1017    99.0%
+bettercnc.browserwatch     345      340    98.6%
+bettercnc.app              303      302    99.7%
+bettercnc.configmodel      198      197    99.5%
+bettercnc.render           509      508    99.8%
 bettercnc.iniload          139      139   100.0%
 bettercnc.mdi               59       59   100.0%
 bettercnc.profiles         293      293   100.0%
-bettercnc.state            233      233   100.0%
-bettercnc.viewmodel        449      449   100.0%
+bettercnc.state            232      232   100.0%
+bettercnc.viewmodel        461      461   100.0%
 ------------------------------------------------
-TOTAL                     2910     2898    99.6%
+TOTAL                     3764     3744    99.5%
 ```
 
 `ui/tools/covreport.py` discovers the package's modules from the directory; its
 hand-kept list had silently left out `bettercnc.mdi` when that module was added.
 
-The 12 uncovered lines: the eight `...` bodies of `MachineAdapter`'s abstract
-methods; `sys.exit(main())` under `app.py`'s `__main__` guard, which runs only in
-`test_app_cli.py`'s subprocess, out of the tracer's reach; `configmodel`'s
-TYPE_CHECKING-only import; `render_program`'s non-empty file branch, unreachable
-because `viewmodel.program_screen` always returns no files; and the message of
-the import-time assert in `capabilities.py`, evaluated only if that assert fails.
+The uncovered lines (`make coverage-missing`, 2026-10-21): the `...` bodies of
+`MachineAdapter`'s abstract methods; `sys.exit(main())` under the `__main__`
+guards of `app.py`, `bootpage.py` and `browserwatch.py`, which run only in
+subprocesses, out of the tracer's reach; `configmodel`'s TYPE_CHECKING-only
+import; `render_program`'s non-empty file branch, unreachable because
+`viewmodel.program_screen` always returns no files; the message of the
+import-time assert in `capabilities.py`, evaluated only if that assert fails;
+and a few `continue`/`return None`/`pass` lines on defensive branches of the
+halcmd helper, the screen guard's tab table and its pipe clean-up.
 
 ### Mutation testing
 
@@ -947,7 +962,7 @@ survive are listed under What is NOT covered.
 ### What is NOT covered — plainly
 
 **1. `LinuxCncAdapter` on a real machine.** It is now tested —
-`test_linuxcnc_adapter.py` (171 tests) drives every action against
+`test_linuxcnc_adapter.py` (231 tests) drives every action against
 `fake_linuxcnc.py` and asserts the exact command sequence and that the fake
 refused nothing — but it has never run against LinuxCNC. The
 fake is only as right as our reading of the source. It does not model echo
@@ -967,12 +982,14 @@ adapter refuses (Known gaps). Tests that pass on the mock prove the rules, not
 the machine.
 
 **3. The browser.** `app.js` has no tests — no test runner for JS without
-dependencies. It is deliberately about 100 lines that forward clicks and swap
-`innerHTML`; all logic worth testing is in Python. A failed request is no
-longer swallowed (2026-10-20): three failed polls, or one failed action, cover
-the screen with `BAĞLANTI YOK` and "the values are stale", and in kiosk mode
-(`--boot-url`, deploy/README.md) the page goes back to the boot screen - seen
-working in `sim/sim.sh kiosk`. Exercised by hand once, in a real browser against `sim/` (2026-10-19):
+dependencies. It is deliberately small (about 280 lines) and forwards clicks,
+swaps `innerHTML` and watches the connection; all logic worth testing is in
+Python. A failed request is no longer swallowed (2026-10-20): `LOST_MS` (3 s)
+without a good answer, or one failed action, covers the screen with
+`BAĞLANTI YOK` and "the values are stale" - with an estop button on the
+overlay, since the server acts on that one without its lock (2026-10-21) - and
+in kiosk mode (`--boot-url`, deploy/README.md) the page goes back to the boot
+screen once that answers - seen working in `sim/sim.sh kiosk`. Exercised by hand once, in a real browser against `sim/` (2026-10-19):
 typed MDI text and focus survive the 1 Hz re-render, and two bugs were found
 and fixed - a click into the MDI field posted an empty MDI line (the click
 handler matched the MDI `<form>`'s data-action), and the re-focus after each
@@ -1072,10 +1089,11 @@ TestToolMmapFidelity; `test_app_cli.TestAdapterChoice`):
   put LinuxCNC in ESTOP and the message line kept `Besleme %150 istendi...`.
   Now `LinuxCncAdapter._note_task_state` reports LinuxCNC leaving ON without
   an action of this UI, once, as an ERROR alarm and on the message line
-  (`Watchdog ısırdı — LinuxCNC acil stopa geçti...` when the watchdog pin is
-  set; otherwise `...acil stopa geçti — komut bu arayüzden gelmedi` or
-  `...makineyi kapattı — ...`). The UI's own software estop is not reported
-  again; LinuxCNC's own error text, drained in the same snapshot, is kept.
+  (`Kartla bağlantı koptu — makine durduruldu` with the action to take when a
+  link fault is set; otherwise `Makine acil stopa geçti — komut bu ekrandan
+  gelmedi` or `Makine kapatıldı — ...`). The UI's own software estop is not
+  reported again; LinuxCNC's own error text, drained in the same snapshot, is
+  kept.
   "The estop message can be overwritten" above is still open.
 - ~~**The UI started before LinuxCNC.**~~ The cause is in the binding, not
   in `stat()`: the first `poll()` in a process opens LinuxCNC's tool mmap
@@ -1137,7 +1155,8 @@ real `halcmd` (values and reasons for every timeout: deploy/README.md,
   shortcuts sent into the kiosk changed nothing on screen. Tab is off too
   (keymap and page): it walks a focus ring across the buttons, which gives
   the browser away; in kiosk mode tooltips (`title`) are removed, no focus
-  outline is drawn, the cursor stays an arrow and the scrollbar is themed.
+  outline is drawn, the cursor is an arrow on plain text (a hand on buttons,
+  an I-beam in the input) and the scrollbar is themed.
 - **Browser watch** (`bettercnc.browserwatch`): a page that stops asking
   both servers is restarted, judged by their `client_age_s`. Its first
   version restarted the browser on every UI restart; the page now gets
@@ -1159,6 +1178,37 @@ real `halcmd` (values and reasons for every timeout: deploy/README.md,
   first version kept its tab table from events only, missed the title
   updates, took our own pages for foreign ones and closed them every 2 s.
   Tests: `TestScreen`, `TestScreenPipeFaults`.
+
+- **The board link, as the real driver loses it (audit, 2026-10-21).** A
+  cable pull makes `hm2_eth` set `io_error` and nothing else (hm2_eth.c:883);
+  while it is set the driver reads nothing, so `has_bit` never rises
+  (watchdog.c:38), the HAL estop latch never trips and LinuxCNC goes on
+  saying ON while the board's own watchdog has dropped the outputs. The sim
+  stub had modelled the opposite (it held `has_bit`), and the recovery that
+  passed in `sim/` would have answered "zaten açık" on the rig and cleared
+  nothing. Now the adapter sends ESTOP the moment a snapshot sees `io_error`
+  with the machine ON (`_stop_on_link_fault`), and «Yazılım sıfırla» clears
+  `io_error` first, waits `LINK_SETTLE_S` for the bite the driver then reads,
+  clears that `has_bit` too, unhomes, resets, switches on; `io_error` coming
+  straight back means the cable is still out. Re-run in `sim/` with the stub
+  rewritten to the driver's behaviour, with real `halcmd`. Tests:
+  `TestLinkRecovery`.
+- **The stall detector counts CPU time too** (2026-10-21): task does not sleep
+  while it has queued work (emctaskmain.cc:3593), so a long run of program
+  lines could have frozen the switch count and had the kiosk kill LinuxCNC
+  mid-program. `rtapi_app` (uspace's realtime process) is now on the list of
+  processes that must be there. `set_feed_override` refuses without the
+  status like every other send.
+- **The kiosk, after the audit (2026-10-21):** `browserwatch` survives its own
+  errors and a server dying mid-answer (the browser exits with the watch), is
+  itself restarted by `kiosk-session`, restarts a browser that stops
+  answering the pipe, throttles the way back from the wait page and closes a
+  duplicate of our page; a fresh UI that has not been asked yet is not
+  "stale"; `serve()`'s exit code no longer races; the UI describes the INI
+  LinuxCNC runs (`--ini`); why the control system last stopped reaches the
+  new UI's first message (`--startup-note-file`); the unit waits for no
+  network and keeps local time; `bootstrap-ssh.sh` locks the door before
+  installing sshd; `machine.sh` keeps `docs/PLAN-BUGUN.md` on the Mac.
 
 **Deployment rule from the last one (Pi 4 included):** start the UI after
 LinuxCNC, as the user that started LinuxCNC (same `HOME`). The kiosk

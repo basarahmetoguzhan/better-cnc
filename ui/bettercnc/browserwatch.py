@@ -21,7 +21,11 @@ boot screen BOOT_MS after its last answer (app.js). So the boot screen's
 silence counts only once the UI has been away longer than BOOT_HANDOFF_S.
 The first version of this watch did not wait: in sim/ on 2026-10-20 it
 restarted the browser on every UI restart. With neither server reachable
-nothing is restarted.
+nothing is restarted. A server that answers but has never been asked since
+it started (client_age_s null: a UI back after a short outage, a boot
+screen just restarted) counts from the moment it is first seen that way,
+not as "stale": judged as stale it had the browser restarted in the second
+between the UI coming back and the page's next poll (audit, 2026-10-21).
 
 And it keeps Chromium's own pages off the screen (Screen): a crashed tab
 ("Aw, Snap"), a connection error, a blocked page. The browser runs with
@@ -47,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import http.client
 import json
 import os
 import signal
@@ -97,9 +102,15 @@ TITLE_MARK = "better-cnc · "
 WAIT_URL = "file:///usr/share/bettercnc/wait.html"
 #: Chromium's own internal pages (the hidden omnibox popup, say): not tabs.
 INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://")
-#: At most one replacement tab is opened per this long, so a guard that
-#: misjudges can never flood the browser with tabs.
+#: At most one replacement tab is opened per this long - on the way to the
+#: wait page and on the way back - so a guard that misjudges, or a tab
+#: list that lags a closed tab, can never flood the browser with tabs.
 REPLACE_AGAIN_S = 5.0
+#: Looks (GUARD_EVERY_S apart) the browser may leave unanswered before it
+#: counts as hung: a Chromium whose main thread is stuck answers nothing on
+#: the pipe while its page may still poll. 20 looks = 10 s, as STALE_S;
+#: judged only after GRACE_S, like a dead page.
+STUCK_LOOKS = 20
 
 
 class Screen:
@@ -152,6 +163,7 @@ class Screen:
         self._sent = 0
         self._asked: set = set()
         self._last_replace: Optional[float] = None
+        self._seq = 0   # tabs numbered as first seen: the newest is the one in front
         self._crash = threading.Event()
         self.send("Target.setDiscoverTargets", {"discover": True})
         self._reader = threading.Thread(target=self._read, name="browserwatch-cdp", daemon=True)
@@ -197,7 +209,9 @@ class Screen:
             if method in ("Target.targetCreated", "Target.targetInfoChanged"):
                 info = params.get("targetInfo") or {}
                 if info.get("type") == "page" and "targetId" in info:
-                    tab = self._tabs.setdefault(info["targetId"], {"crashed": False, "since": None})
+                    tab = self._tabs.get(info["targetId"])
+                    if tab is None:
+                        tab = self._tabs[info["targetId"]] = self._new_tab()
                     tab["url"] = info.get("url", "")
                     tab["title"] = info.get("title", "")
             elif method == "Target.targetDestroyed":
@@ -215,11 +229,20 @@ class Screen:
         for info in infos:
             if info.get("type") != "page" or "targetId" not in info:
                 continue
-            tab = self._tabs.get(info["targetId"], {"crashed": False, "since": None})
+            tab = self._tabs.get(info["targetId"]) or self._new_tab()
             tab["url"] = info.get("url", "")
             tab["title"] = info.get("title", "")
             fresh[info["targetId"]] = tab
         return fresh
+
+    def _new_tab(self) -> Dict[str, Any]:
+        self._seq += 1
+        return {"crashed": False, "since": None, "order": self._seq}
+
+    def unanswered(self) -> int:
+        """Looks the browser has not answered yet (see STUCK_LOOKS)."""
+        with self._lock:
+            return len(self._asked)
 
     def _server_of(self, url: str) -> Optional[str]:
         return next((o for o in self._origins if url.startswith(o)), None)
@@ -272,12 +295,14 @@ class Screen:
                     continue
                 bad.append(i)
             waiting = [i for i in good if tabs[i]["url"] == self._wait_url]
+            pages = sorted((i for i in good if i not in waiting), key=lambda i: tabs[i]["order"])
             what = ["{} ({!r}, {!r})".format(why[i], tabs[i].get("url", "")[:60],
                                              tabs[i].get("title", "")[:40]) for i in bad]
         done: List[str] = []
+        recent = self._last_replace is not None and now - self._last_replace < REPLACE_AGAIN_S
         if bad:
             if not good:
-                if self._last_replace is not None and now - self._last_replace < REPLACE_AGAIN_S:
+                if recent:
                     return done  # one replacement is on its way
                 self._last_replace = now
                 url = back or self._wait_url
@@ -286,11 +311,19 @@ class Screen:
             for i in bad:
                 self.send("Target.closeTarget", {"targetId": i})
             done.extend("kapatıldı: " + w for w in what)
-        elif waiting and back and len(waiting) == len(good):
+        elif waiting and back and not pages and not recent:
+            self._last_replace = now
             self.send("Target.createTarget", {"url": back})
             for i in waiting:
                 self.send("Target.closeTarget", {"targetId": i})
             done.append(self._names[back][1])
+        elif len(pages) > 1:
+            # Two of our pages: a replacement opened while the tab list still
+            # showed the one it replaced (sim/ 2026-10-21 audit). The newest
+            # is in front; the others go, or each would poll for ever.
+            for i in pages[:-1]:
+                self.send("Target.closeTarget", {"targetId": i})
+            done.append("fazla sekme kapatıldı ({})".format(len(pages) - 1))
         return done
 
     def close(self) -> None:
@@ -317,11 +350,21 @@ def start_browser(command: List[str], ui_url: str, boot_url: str):
     """
     cmd_r, cmd_w = os.pipe()   # we write commands, the browser reads (its fd 3)
     ev_r, ev_w = os.pipe()     # the browser writes (its fd 4), we read
-    # The child's ends above 20, so moving them to 3 and 4 cannot overwrite
-    # one with the other.
-    cmd_r, ev_w = _above(cmd_r, 20), _above(ev_w, 20)
-    env = dict(os.environ, BETTERCNC_CDP_FDS="{} {}".format(cmd_r, ev_w))
-    proc = subprocess.Popen(command, env=env, pass_fds=(cmd_r, ev_w))
+    try:
+        # The child's ends above 20, so moving them to 3 and 4 cannot
+        # overwrite one with the other.
+        cmd_r, ev_w = _above(cmd_r, 20), _above(ev_w, 20)
+        env = dict(os.environ, BETTERCNC_CDP_FDS="{} {}".format(cmd_r, ev_w))
+        proc = subprocess.Popen(command, env=env, pass_fds=(cmd_r, ev_w))
+    except Exception:
+        # A start that fails is retried every RESTART_PAUSE_S (watch); the
+        # four pipe ends would leak each time (review, 2026-10-21).
+        for fd in (cmd_r, cmd_w, ev_r, ev_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
     os.close(cmd_r)
     os.close(ev_w)
     return proc, Screen(cmd_w, ev_r, ui_url, boot_url)
@@ -333,7 +376,9 @@ def client_age(url: str, timeout: float = ASK_TIMEOUT_S) -> Optional[float]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException):
+        # HTTPException: BadStatusLine, IncompleteRead - a server dying
+        # mid-answer, as the UI does whenever LinuxCNC stops (audit 2026-10-21)
         return None
     if not isinstance(data, dict) or data.get("ok") is not True:
         return None
@@ -394,40 +439,75 @@ def watch(
     as described above; `starts` bounds the number of starts (tests), None
     runs forever. Returns the starts made."""
     made = 0
+    unasked: Dict[str, Optional[float]] = {}
+
+    def age_seen(key: str, age: Optional[float], now: float) -> Optional[float]:
+        """`age` as page_is_dead() should see it: a server never asked since
+        it started (NEVER) counts from when it was first seen that way."""
+        if age != NEVER:
+            unasked[key] = None
+            return age
+        if unasked.get(key) is None:
+            unasked[key] = now
+        return now - unasked[key]
+
+    # Nothing here may end this process: the browser holds the other ends of
+    # the DevTools pipe and exits the moment they close (a real Chrome, 0.13 s,
+    # audit 2026-10-21), and then nothing on the kiosk would open it again.
     while starts is None or made < starts:
-        proc, screen = start(command)
         made += 1
+        try:
+            proc, screen = start(command)
+        except Exception as exc:  # noqa: BLE001 - see above
+            log("tarayıcı başlatılamadı ({}: {}) — yeniden denenecek".format(type(exc).__name__, exc))
+            sleep(RESTART_PAUSE_S)
+            continue
         started = clock()
         ui_away_since: Optional[float] = None
         next_ask = started  # at the first look: where to go back to is known at once
         ui_up = boot_up = False
-        while True:
-            if screen is not None:
-                screen.wait(GUARD_EVERY_S)
-            else:
-                sleep(GUARD_EVERY_S)
-            if proc.poll() is not None:
-                log("tarayıcı kapandı (çıkış kodu {}) — yeniden açılıyor".format(proc.returncode))
-                break
-            now = clock()
-            if now >= next_ask:
-                next_ask = now + CHECK_EVERY_S
-                ui_age, boot_age = ask(ui_health), ask(boot_health)
-                ui_up, boot_up = ui_age is not None, boot_age is not None
-                if ui_age is None:
-                    ui_away_since = now if ui_away_since is None else ui_away_since
+        try:
+            while True:
+                if screen is not None:
+                    screen.wait(GUARD_EVERY_S)
                 else:
-                    ui_away_since = None
-                away = 0.0 if ui_away_since is None else now - ui_away_since
-                if page_is_dead(ui_age, boot_age, now - started, away):
-                    log("tarayıcı {:g} s'dir hiçbir sayfayı sormadı — yeniden başlatılıyor".format(STALE_S))
-                    stop(proc)
+                    sleep(GUARD_EVERY_S)
+                if proc.poll() is not None:
+                    log("tarayıcı kapandı (çıkış kodu {}) — yeniden açılıyor".format(proc.returncode))
                     break
+                now = clock()
+                if now >= next_ask:
+                    next_ask = now + CHECK_EVERY_S
+                    ui_age = age_seen("ui", ask(ui_health), now)
+                    boot_age = age_seen("boot", ask(boot_health), now)
+                    ui_up, boot_up = ui_age is not None, boot_age is not None
+                    if ui_age is None:
+                        ui_away_since = now if ui_away_since is None else ui_away_since
+                    else:
+                        ui_away_since = None
+                    away = 0.0 if ui_away_since is None else now - ui_away_since
+                    if page_is_dead(ui_age, boot_age, now - started, away):
+                        log("tarayıcı {:g} s'dir hiçbir sayfayı sormadı — yeniden başlatılıyor".format(STALE_S))
+                        stop(proc)
+                        break
+                if screen is not None:
+                    # not before GRACE_S: a cold Chromium answers nothing
+                    # until its main loop runs, and that first start can
+                    # take tens of seconds on a Pi (README, GRACE_S)
+                    if now - started >= GRACE_S and screen.unanswered() > STUCK_LOOKS:
+                        log("tarayıcı {:g} s'dir bekçiye cevap vermiyor — yeniden başlatılıyor".format(
+                            STUCK_LOOKS * GUARD_EVERY_S))
+                        stop(proc)
+                        break
+                    for what in screen.guard(ui_up, boot_up):
+                        log(what)
+        except Exception as exc:  # noqa: BLE001 - see above
+            log("bekçi hatası ({}: {}) — tarayıcı yeniden açılıyor".format(type(exc).__name__, exc))
+            if proc.poll() is None:
+                stop(proc)
+        finally:
             if screen is not None:
-                for what in screen.guard(ui_up, boot_up):
-                    log(what)
-        if screen is not None:
-            screen.close()
+                screen.close()
         sleep(RESTART_PAUSE_S)
     return made
 

@@ -1230,14 +1230,29 @@ class TestActionsWithTheStatusLost(FakeCase):
         self.assertEqual(self.machine.stat_polls, polls)
         self.assertEqual(self.machine.log, [("state", (C["STATE_ESTOP"],))])
 
-    def test_feed_and_step_do_not_poll(self):
+    def test_the_feed_override_message_survives_the_poll_after_an_outage(self):
+        """The poll after an outage writes "yeniden okunuyor"; it must come
+        before this action's own message, not after (review 2026-10-21)."""
+        adapter = self.on(homed=True)
+        self.machine.channels_valid = False
+        adapter.snapshot()
+        self.machine.channels_valid = True
+        adapter.set_feed_override(50)
+        self.assertEqual(adapter.snapshot().message, "Besleme %50.")
+        self.assertIn(("feedrate", (0.5,)), self.machine.log)
+
+    def test_the_step_does_not_poll_but_the_feed_override_refuses(self):
+        """The jog step is the adapter's own; the feed override is a send,
+        and a send to a stuck task spins 5 s holding the GIL (audit,
+        2026-10-21: it used to go out without the guard's question)."""
         adapter = self.on(homed=True)
         self.machine.channels_valid = False
         polls = self.machine.stat_polls
-        adapter.set_feed_override(50)
         adapter.set_jog_step(0.1)
         self.assertEqual(self.machine.stat_polls, polls)
-        self.assertEqual(self.machine.log, [("feedrate", (0.5,))])
+        adapter.set_feed_override(50)
+        self.assertEqual(self.machine.log, [])
+        self.assertEqual(adapter.snapshot().message, A.NO_LINUXCNC_REFUSAL)
 
     def test_a_session_action_answers_instead_of_raising(self):
         adapter = self.on(homed=True)
@@ -2685,6 +2700,126 @@ class TestLinkRecovery(FakeCase):
         self.assertNotIn(("state", (C["STATE_ON"],)), self.machine.log)
         self.assertEqual(adapter.snapshot().message, A.LINK_NOT_RESTORED)
 
+    def pulled(self) -> LinuxCncAdapter:
+        """A cable pull on the real driver: io_error alone, nothing trips the
+        latch, LinuxCNC says ON (hm2_eth.c:883, watchdog.c:38). The adapter's
+        next snapshot stops the machine."""
+        adapter = self.on(homed=True)
+        self.hal.pins[self.IO_ERROR] = True
+        adapter.snapshot()   # stops the machine
+        adapter.snapshot()   # reports the stop as the link's (LINK_LOST)
+        return adapter
+
+    def test_on_the_real_driver_a_cable_pull_is_io_error_and_the_ui_stops_the_machine(self):
+        """Audit 2026-10-21: the sim stub had held has_bit - the opposite of
+        the driver - so the machine looked stopped; on the rig it would have
+        stayed ON with the board's outputs cut, and the reset would have
+        answered "zaten açık"."""
+        adapter = self.on(homed=True)
+        self.hal.pins[self.IO_ERROR] = True
+        del self.machine.log[:]
+        snap = adapter.snapshot()
+        self.assertEqual(self.machine.calls_except("wait_complete"), [("state", (C["STATE_ESTOP"],))])
+        self.assertEqual(self.machine.task_state, C["STATE_ESTOP_RESET"])
+        self.assertEqual(snap.alarms[0].text, A.LINK_LOST + " (iletişim hatası; yazılımdan durduruldu)")
+        self.assertEqual(snap.message, "{}. {}".format(A.LINK_LOST, A.LINK_ACTION))
+        alarms = len(snap.alarms)
+        self.halcmd.on_change = lambda: self.hal.pins.__setitem__(self.IO_ERROR, True)
+        adapter.software_estop_reset()    # pressed at once, cable still out: its answer must stand
+        snap = adapter.snapshot()
+        self.assertEqual(len(snap.alarms), alarms + 1)   # the reset's refusal only
+        self.assertEqual(self.machine.calls_except("wait_complete"), [("state", (C["STATE_ESTOP"],))])
+
+    def test_a_cable_pull_mid_program_stops_the_program(self):
+        """The board has dropped its outputs: nothing of the program is
+        running on the machine any more."""
+        adapter = self.on(homed=True)
+        self.machine.task_mode = C["MODE_AUTO"]
+        self.machine.interp_state = C["INTERP_READING"]
+        self.hal.pins[self.IO_ERROR] = True
+        adapter.snapshot()
+        self.assertIn(("state", (C["STATE_ESTOP"],)), self.machine.log)
+        self.assertEqual(self.machine.interp_state, C["INTERP_IDLE"])
+
+    def test_the_reset_after_a_real_cable_pull_clears_io_error_then_the_bite(self):
+        """io_error cleared, the driver's next read finds the bite the board
+        recorded and raises has_bit - it is cleared too - unhome, reset, ON."""
+        adapter = self.pulled()
+        del self.machine.log[:]
+        bite_pending = [True]
+
+        def driver() -> None:
+            # the first read after the clear finds the bite the board recorded
+            if not self.hal.pins[self.IO_ERROR] and bite_pending[0]:
+                self.hal.pins[self.HAS_BIT] = True
+                bite_pending[0] = False
+            self._couple_latch()
+            self.machine.tick()   # the servo thread: the latch sees the bit at once
+
+        self.halcmd.on_change = driver
+        adapter.software_estop_reset()
+        self.assertEqual(self.halcmd.calls[0], ["setp", self.IO_ERROR, "0"])
+        self.assertEqual(self.halcmd.calls[-1], ["sets", "watchdog", "0"])
+        self.assertEqual(self.machine.calls_except("wait_complete"),
+                         [("unhome", (-1,)), ("state", (C["STATE_ESTOP_RESET"],)),
+                          ("state", (C["STATE_ON"],))])
+        self.assertNoLinuxCncErrors()
+        self.assertEqual(self.machine.task_state, C["STATE_ON"])
+        self.assertEqual(list(self.machine.homed[:3]), [0, 0, 0])
+        self.assertEqual(adapter.snapshot().message, A.LINK_RESTORED)
+
+    def test_a_reset_pressed_before_any_snapshot_saw_the_fault_stops_first(self):
+        adapter = self.on(homed=True)
+        self.hal.pins[self.IO_ERROR] = True
+        del self.machine.log[:]
+        adapter.software_estop_reset()
+        sent = self.machine.calls_except("wait_complete")
+        self.assertEqual(sent[0], ("state", (C["STATE_ESTOP"],)))
+        self.assertEqual(sent[-1], ("state", (C["STATE_ON"],)))
+        self.assertEqual(adapter.snapshot().message, A.LINK_RESTORED)
+
+    def test_a_stop_after_a_successful_reset_is_reported_again(self):
+        """Review 2026-10-21: the reset left _estop_sent up when no snapshot
+        had seen the stop it sent, and the next real stop went unreported."""
+        adapter = self.on(homed=True)
+        self.hal.pins[self.IO_ERROR] = True
+        adapter.software_estop_reset()           # pressed at once, no snapshot between
+        self.assertEqual(self.machine.task_state, C["STATE_ON"])
+        adapter.snapshot()
+        self.bite()                              # a real stop, not ours
+        snap = adapter.snapshot()
+        self.assertEqual(snap.alarms[0].text, A.LINK_LOST)
+        self.assertEqual(snap.message, "{}. {}".format(A.LINK_LOST, A.LINK_ACTION))
+
+    def test_a_cable_still_out_brings_io_error_straight_back(self):
+        """Five misses after the clear (packet_error_limit 10, increment 2,
+        hm2_eth.c:874-883): nothing else is touched, the operator is told."""
+        adapter = self.pulled()
+        del self.machine.log[:]
+
+        def driver() -> None:
+            if not self.hal.pins[self.IO_ERROR]:
+                self.hal.pins[self.IO_ERROR] = True
+
+        self.halcmd.on_change = driver
+        adapter.software_estop_reset()
+        self.assertEqual(self.halcmd.calls, [["setp", self.IO_ERROR, "0"]])
+        self.assertEqual(self.machine.task_state, C["STATE_ESTOP_RESET"])
+        self.assertEqual(self.machine.calls_except("wait_complete"), [])
+        self.assertEqual(adapter.snapshot().message, A.LINK_NOT_RESTORED)
+        self.assertIn("iletişim hatası sürüyor", adapter.snapshot().alarms[0].text)
+
+    def test_a_board_that_was_power_cycled_recorded_no_bite(self):
+        """io_error alone, nothing follows the clear: after LINK_SETTLE_S the
+        reset goes on."""
+        adapter = self.pulled()
+        t0 = self.clock.now
+        adapter.software_estop_reset()
+        self.assertEqual(self.halcmd.calls, [["setp", self.IO_ERROR, "0"]])
+        self.assertGreaterEqual(self.clock.now - t0, A.LINK_SETTLE_S)
+        self.assertEqual(self.machine.task_state, C["STATE_ON"])
+        self.assertEqual(adapter.snapshot().message, A.LINK_RESTORED)
+
     def test_a_halcmd_failure_sends_nothing_and_says_restart(self):
         adapter = self.bitten()
         self.halcmd = lambda args: (False, "HAL kilidi alınamadı")
@@ -2795,6 +2930,16 @@ def write_switches(proc_dir: str, pid: str, count: int) -> None:
                  "voluntary_ctxt_switches:\t{}\nnonvoluntary_ctxt_switches:\t3\n".format(count))
 
 
+def write_ticks(proc_dir: str, pid: str, utime: int, stime: int = 7, comm: str = "x y") -> None:
+    """A /proc/PID/stat as the kernel prints it (sim/, 2026-10-21): the comm
+    in parentheses - it may hold spaces - then 50 fields; utime and stime
+    are the 14th and 15th overall."""
+    fields = [str(pid), "({})".format(comm), "S", "1", "7", "1", "0", "-1", "4194560", "2011",
+              "0", "1", "0", str(utime), str(stime)] + ["0"] * 37
+    with open(os.path.join(proc_dir, pid, "stat"), "w") as fh:
+        fh.write(" ".join(fields) + "\n")
+
+
 def make_proc(testcase: unittest.TestCase, *names: str) -> Tuple[str, Dict[str, str]]:
     """A fake /proc with one process per name; returns (dir, name -> pid)."""
     d = tempfile.mkdtemp()
@@ -2806,6 +2951,7 @@ def make_proc(testcase: unittest.TestCase, *names: str) -> Tuple[str, Dict[str, 
             fh.write(name + "\n")
         pids[name] = str(pid)
         write_switches(d, str(pid), 1000)
+        write_ticks(d, str(pid), 500)
     os.makedirs(os.path.join(d, "self"))  # not a pid: ignored
     os.makedirs(os.path.join(d, "999"))   # exited while listed: no comm
     return d, pids
@@ -2818,17 +2964,17 @@ class TestLinuxCncLost(FakeCase):
         return make_proc(self, *names)[0]
 
     def test_all_there_is_none(self):
-        adapter = self.make(proc_root=self.proc("linuxcncsvr", "milltask", "io", "bash"))
+        adapter = self.make(proc_root=self.proc("linuxcncsvr", "milltask", "io", "rtapi_app", "bash"))
         self.assertIsNone(adapter.linuxcnc_lost())
 
     def test_a_dead_task_is_named(self):
         """Task gone: the status buffer still reads, stale - only the process
         list shows it."""
-        adapter = self.make(proc_root=self.proc("linuxcncsvr", "io"))
+        adapter = self.make(proc_root=self.proc("linuxcncsvr", "io", "rtapi_app"))
         self.assertEqual(adapter.linuxcnc_lost(), "LinuxCNC'nin bir parçası çalışmıyor (milltask)")
 
     def test_unreadable_status_is_named(self):
-        adapter = self.make(proc_root=self.proc("linuxcncsvr", "milltask", "io"))
+        adapter = self.make(proc_root=self.proc("linuxcncsvr", "milltask", "io", "rtapi_app"))
         self.machine.channels_valid = False
         self.assertTrue(adapter.linuxcnc_lost().startswith("LinuxCNC'nin durumu okunamıyor"))
 
@@ -2840,29 +2986,86 @@ class TestLinuxCncLost(FakeCase):
             self, {("TASK", "TASK"): "emctask", ("EMCIO", "EMCIO"): "myio"},
         )
         adapter = self.make(profile=profile)
-        self.assertEqual(adapter._linuxcnc_processes, ("linuxcncsvr", "linuxcnctask", "myio"))
+        self.assertEqual(adapter._linuxcnc_processes,
+                         ("linuxcncsvr", "linuxcnctask", "myio", "rtapi_app"))
+        self.assertEqual(adapter._loop_processes, ("linuxcnctask", "myio"))
+
+    def test_the_startup_note_is_logged_and_shown(self):
+        adapter = self.make()
+        adapter.note_startup("13:10 — LinuxCNC'nin durumu okunamıyor")
+        snap = adapter.snapshot()
+        self.assertEqual(snap.message,
+                         "Kontrol sistemi yeniden başlatıldı — önceki durma: 13:10 — "
+                         "LinuxCNC'nin durumu okunamıyor")
+        self.assertEqual(snap.alarms[0].source, "kiosk")
+
+    def test_a_dead_rtapi_app_is_named(self):
+        """uspace's realtime process, motion and the board driver in one
+        (scripts/realtime.in); with it gone the status still reads. Named
+        rtapi_app in /proc (sim/, 2026-10-21)."""
+        adapter = self.make(proc_root=self.proc("linuxcncsvr", "milltask", "io"))
+        self.assertEqual(adapter.linuxcnc_lost(), "LinuxCNC'nin bir parçası çalışmıyor (rtapi_app)")
 
 
 
 class TestStuckLoop(FakeCase):
     """A LinuxCNC task (or iocontrol) that hangs without dying, judged by
-    the kernel's count of its voluntary context switches (_stalled_loops):
-    the stand-in for task's heartbeat, which the binding does not export."""
+    the kernel's counts of its voluntary context switches and CPU time
+    (_stalled_loops): the stand-in for task's heartbeat, which the binding
+    does not export."""
 
-    NAMES = ("linuxcncsvr", "milltask", "io")
+    NAMES = ("linuxcncsvr", "milltask", "io", "rtapi_app")
 
     def setUp(self):
         self.d, self.pids = make_proc(self, *self.NAMES)
         self.adapter = self.on(homed=True, proc_root=self.d)
         self.counts = {n: 1000 for n in self.NAMES}
+        self.ticks = {n: 500 for n in self.NAMES}
 
-    def tick(self, seconds: float, frozen=(), ) -> None:
-        """Let `seconds` pass; every loop but the `frozen` ones runs."""
+    def tick(self, seconds: float, frozen=(), eager=()) -> None:
+        """Let `seconds` pass; every loop but the `frozen` ones runs. An
+        `eager` loop works without sleeping: CPU time grows, switches do
+        not (task with queued program lines, emctaskmain.cc:3593)."""
         self.clock.now += seconds
         for name in ("milltask", "io"):
-            if name not in frozen:
+            if name not in frozen and name not in eager:
                 self.counts[name] += max(1, int(seconds * 50))
+                self.ticks[name] += max(1, int(seconds * 3))
+            if name in eager:
+                self.ticks[name] += max(1, int(seconds * 90))
             write_switches(self.d, self.pids[name], self.counts[name])
+            write_ticks(self.d, self.pids[name], self.ticks[name])
+
+    def test_an_eager_task_is_alive(self):
+        """Audit 2026-10-21: task skips its sleep while it has queued work,
+        so a long run of program lines froze the switch count; judged by
+        switches alone the UI would have exited and the kiosk killed LinuxCNC
+        mid-program."""
+        self.adapter.snapshot()
+        for _ in range(4):
+            self.tick(1.0, eager=("milltask",))
+            self.assertIsNone(self.adapter.linuxcnc_lost())
+        self.tick(1.0, frozen=("milltask",))
+        self.tick(A.LOOP_STALL_S, frozen=("milltask",))
+        self.assertEqual(self.adapter.linuxcnc_lost(),
+                         "LinuxCNC'nin bir parçası cevap vermiyor (milltask)")
+
+    def test_cpu_ticks_are_read_past_a_comm_with_spaces_and_parens(self):
+        write_ticks(self.d, self.pids["io"], 18, 7, comm="io (x) y")
+        self.assertEqual(A._cpu_ticks(self.d, self.pids["io"]), 25)
+        self.assertIsNone(A._cpu_ticks(self.d, "424242"))
+        with open(os.path.join(self.d, self.pids["io"], "stat"), "w") as fh:
+            fh.write("garbage\n")
+        self.assertIsNone(A._cpu_ticks(self.d, self.pids["io"]))
+
+    def test_rtapi_app_is_not_judged(self):
+        """/proc/PID/status counts the main thread, which idles in rtapi_app
+        while its realtime thread works (sim/ 2026-10-21: 6 switches in
+        total for a running one)."""
+        self.adapter.snapshot()
+        for _ in range(4):
+            self.tick(1.0)   # rtapi_app's counters never move
+        self.assertIsNone(self.adapter.linuxcnc_lost())
 
     def test_running_loops_are_fine(self):
         for _ in range(5):

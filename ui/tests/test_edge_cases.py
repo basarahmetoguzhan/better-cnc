@@ -1383,10 +1383,10 @@ def _session_adapter_calls():
 
 class TestAdapterContract(unittest.TestCase):
     def test_every_method_the_session_relies_on_is_abstract(self):
-        """The real adapter only runs on the machine. LinuxCncAdapter's own
-        docstring says tests do not exercise it. So "it implements everything
-        the UI calls" has to be enforced at class definition time, by
-        MachineAdapter's abstract methods.
+        """The real adapter is exercised only against a fake
+        (test_linuxcnc_adapter.py), never the machine. So "it implements
+        everything the UI calls" is also enforced at class definition time,
+        by MachineAdapter's abstract methods.
 
         If a method Session calls unconditionally were not abstract, an adapter
         that forgot it would either crash on the first click or, if the base

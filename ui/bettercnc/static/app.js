@@ -34,6 +34,8 @@
   var inFlight = false;
   var bootAsking = false;
   var overlay = null;
+  var lostText = "";       // what the overlay says
+  var lostEstop = "";      // what became of an estop sent from it
 
   function line(cls, text) {
     var d = document.createElement("div");
@@ -42,6 +44,10 @@
     return d;
   }
 
+  // The overlay keeps an estop button (audit 2026-10-21: it used to cover
+  // the one estop this rig has). The server runs software_estop without
+  // taking its lock, so a server that is slow rather than dead still acts
+  // on it; the page cannot tell which, and says so.
   function showLost(text) {
     if (!overlay) {
       overlay = document.createElement("div");
@@ -49,15 +55,41 @@
       overlay.setAttribute("role", "alert");
       document.body.appendChild(overlay);
     }
+    lostText = text;
     overlay.textContent = "";
     overlay.appendChild(line("lost-title", "BAĞLANTI YOK"));
     overlay.appendChild(line("lost-text", text));
     overlay.appendChild(line("lost-hint",
       "Ekrandaki değerler ESKİ. Acil durumda makinenin gücünü kesin."));
+    var estop = document.createElement("button");
+    estop.type = "button";
+    estop.className = "lost-estop";
+    estop.textContent = "YAZILIM ACİL STOP GÖNDER";
+    estop.addEventListener("click", sendLostEstop);
+    overlay.appendChild(estop);
+    if (lostEstop) overlay.appendChild(line("lost-sent", lostEstop));
+  }
+
+  function sendLostEstop() {
+    lostEstop = "Acil stop gönderildi — makineye ULAŞTIĞI BİLİNMİYOR. Emin olmak için gücü kesin.";
+    showLost(lostText);
+    timed("/api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "software_estop", value: "", screen: screen })
+    }, ACTION_TIMEOUT_MS)
+      .then(json)
+      .then(function (data) { lostEstop = ""; connectionOk(); swap(data); })
+      .catch(function () {
+        lostEstop = "Acil stop gönderildi, cevap GELMEDİ — makineye ulaştığı bilinmiyor. " +
+                    "Emin olmak için gücü kesin.";
+        if (overlay) showLost(lostText);
+      });
   }
 
   function connectionOk() {
     lastOk = Date.now();
+    lostEstop = "";
     if (overlay) {
       overlay.remove();
       overlay = null;

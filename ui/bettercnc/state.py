@@ -275,8 +275,11 @@ class LinkHealth(NamedTuple):
 
         Not "watchdog bit" or "io_error": the person at the machine needs a
         cause they can check and the button to press (2026-10-20). Both
-        faults stop the machine and are cleared by «Yazılım sıfırla»
-        (LinuxCncAdapter._clear_link_faults); the reset also unhomes.
+        faults stop the machine - the bit through the HAL estop latch, the
+        driver's io_error through the UI, which sends ESTOP when it sees it
+        with the machine ON (LinuxCncAdapter._stop_on_link_fault; on the real
+        driver a cable pull raises io_error alone) - and both are cleared by
+        «Yazılım sıfırla» (_clear_link_faults); the reset also unhomes.
         """
         out: List[str] = []
         if not self.connected:

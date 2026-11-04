@@ -17,6 +17,7 @@ mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
 export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
 export BETTERCNC_INI="${BETTERCNC_INI:-$RUN/test-rig-sim.ini}" BETTERCNC_PROFILE=test-rig
+export TZ=Europe/Istanbul   # as the service sets it (kiosk.sh install --tz)
 # The machine's kiosk keyboard, as the service sets it (no keyboard is
 # attached here; deploy/'s keymap is checked by test_deploy.TestKioskKeymap).
 export XKB_CONFIG_EXTRA_PATH="$REPO/deploy/files/xkb" XKB_DEFAULT_LAYOUT=tr XKB_DEFAULT_OPTIONS=bettercnc:kiosk

@@ -34,15 +34,19 @@ minimum olduğu bilinmiyor (Y DIR arızası); simülatör Y'yi X gibi varsayar.
 ## Arıza canlandırma
 
 ```bash
-sim/sim.sh halcmd sets watchdog TRUE                  # watchdog ısırdı → LinuxCNC ESTOP
-sim/sim.sh halcmd sets watchdog FALSE                 # temizle, sonra arayüzden "Yazılım sıfırla"
+sim/sim.sh halcmd setp hm2_7i92.0.sim-link-down 1   # kablo çekildi: gerçek sürücü gibi
+                                                    # io_error kalkar, makine AÇIK kalır
+sim/sim.sh halcmd setp hm2_7i92.0.sim-link-down 0   # kablo takıldı; sonra arayüzden «Yazılım sıfırla»
+sim/sim.sh halcmd sets watchdog TRUE                  # elle ısırma: has_bit → LinuxCNC ESTOP
 sim/sim.sh halcmd setp hm2_7i92.0.packet-error-total 7
 sim/sim.sh halcmd setp hm2_7i92.0.io_error 1
-sim/sim.sh halcmd setp hm2_7i92.0.sim-link-down 1   # kablo hâlâ takılı değil: sıfırlama tutmaz
 ```
 
 Arayüzün «Yazılım sıfırla»sı kart bağlantısı bayraklarını kendisi `halcmd` ile indirir
-(rig'de de öyle); `sets watchdog FALSE` artık gerekmiyor.
+(rig'de de öyle): önce `io_error`, sonra sürücünün o an bulduğu ısırık (`has_bit`).
+Kablo hâlâ takılı değilse `io_error` hemen geri gelir ve sıfırlama "bağlantı kurulamadı"
+der. Taklidin ilk sürümü `has_bit`'i tutuyordu — gerçek sürücünün tersi (2026-10-21
+denetimi); gerçek davranış `sim/hm2_link_stub.py`nin başında.
 
 ## 2026-10-19'da bulunanlar
 

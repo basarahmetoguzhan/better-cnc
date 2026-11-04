@@ -44,7 +44,12 @@ case "$cmd" in
   bootstrap)
     ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
     [ -n "$ip" ] || { echo "Mac'in yerel ağ adresi bulunamadı" >&2; exit 1; }
-    dir="$(mktemp -d)"; trap 'rm -rf "$dir"' EXIT
+    dir="$(mktemp -d)"; srv=""
+    # The server is a background job: it does not get the Ctrl-C this shell
+    # gets, and used to go on serving the deleted directory - the next
+    # bootstrap then failed to bind and the machine's curl got a 404 from the
+    # old one (audit 2026-10-21).
+    trap 'kill "$srv" 2>/dev/null; rm -rf "$dir"' EXIT
     cp "$DEPLOY_DIR/bootstrap-ssh.sh" "$dir/b"
     echo "Makinede, normal kullanıcıyla bir terminalde şunu yazın:"
     echo
@@ -52,10 +57,14 @@ case "$cmd" in
     echo
     echo "(15 dakika açık; macOS gelen bağlantı izni sorarsa izin verin)"
     # Only this one file, only on the LAN address, only for 15 minutes.
-    ( cd "$dir" && exec python3 -m http.server 8765 --bind "$ip" ) &
+    ( cd "$dir" && exec python3 -m http.server 8765 --bind "$ip" >/dev/null 2>&1 ) &
     srv=$!
-    sleep 900 || true
-    kill "$srv" 2>/dev/null || true ;;
+    sleep 1
+    if ! kill -0 "$srv" 2>/dev/null; then
+      echo "8765 portu açılamadı — eski bir bootstrap hâlâ açık olabilir: lsof -i :8765" >&2
+      exit 1
+    fi
+    sleep 900 || true ;;
   ssh)
     remote "$@" ;;
   info)
@@ -66,6 +75,7 @@ echo "== linuxcnc"; dpkg-query -W -f='${Package} ${Version}\n' 'linuxcnc*' 2>/de
 echo "== sudo";     sudo -n true 2>/dev/null && echo "şifre sormuyor" || echo "şifre soruyor"
 echo "== açılış";   cat /proc/cmdline
 echo "== persistence"; ls /run/live/persistence 2>/dev/null || echo "(live persistence dizini yok)"
+echo "== saat";     timedatectl show -p Timezone -p NTPSynchronized -p TimeUSec 2>/dev/null || date
 echo "== ağ";       ip -brief addr
 echo "== masaüstü"; readlink /etc/systemd/system/display-manager.service || echo yok
 echo "== kiosk";    systemctl is-enabled bettercnc-kiosk.service 2>/dev/null || echo kurulu değil
@@ -81,8 +91,10 @@ EOF
   sync)
     need_host
     apply=0; [ "${1:-}" = --apply ] && apply=1
+    # docs/PLAN-BUGUN.md stays on the Mac, like it stays out of git.
     excludes=(--exclude .git/ --exclude reference/ --exclude __pycache__/ --exclude .DS_Store
-              --exclude .claude/ --exclude deploy/machine.local --exclude '*-kiosk.ini')
+              --exclude .claude/ --exclude deploy/machine.local --exclude '*-kiosk.ini'
+              --exclude docs/PLAN-BUGUN.md)
     if [ "$apply" = 0 ]; then
       echo "Kopyalanacaklar (deneme, hiçbir şey değişmedi):"
       rsync -rlptzi --dry-run "${excludes[@]}" -e "ssh ${SSH_OPTS[*]}" \
@@ -91,26 +103,32 @@ EOF
       exit 0
     fi
     ts="$(date +%Y%m%d-%H%M%S)"
-    echo "== makinedeki yerel değişiklikler yedekleniyor: ~/better-cnc-yedek/$ts"
+    # What differs from the machine's own git HEAD: its own edits, and after
+    # the first sync everything earlier syncs brought (.git is never copied,
+    # so the machine's HEAD stays where its clone was). A safety net for a
+    # hand edit at the machine, nothing finer.
+    echo "== makinedeki çalışma ağacının HEAD'den farkı yedekleniyor: ~/better-cnc-yedek/$ts"
     remote bash -s -- "$CNC_REPO" "$ts" <<'EOF'
 set -e
 repo="$HOME/$1"; out="$HOME/better-cnc-yedek/$2"
-[ -d "$repo/.git" ] || { echo "(repo yok, yedek gerekmiyor)"; exit 0; }
+[ -d "$repo/.git" ] || { echo "(git deposu yok, yedek gerekmiyor)"; exit 0; }
 mkdir -p "$out"
 git -C "$repo" status --short > "$out/status.txt"
 git -C "$repo" diff > "$out/diff.patch"
+# --ignore-failed-read: a tracked file deleted at the machine is listed but
+# not there to pack; the backup must not stop the sync over it.
 git -C "$repo" ls-files -m -o --exclude-standard -z \
-  | (cd "$repo" && xargs -0 -r tar -czf "$out/files.tar.gz")
+  | (cd "$repo" && xargs -0 -r tar --ignore-failed-read -czf "$out/files.tar.gz")
 cat "$out/status.txt"
 EOF
     rsync -rlptz "${excludes[@]}" -e "ssh ${SSH_OPTS[*]}" "$REPO/" "$CNC_USER@$CNC_HOST:$CNC_REPO/"
     echo "== kopyalandı; makinede git status:"
-    remote git -C "$CNC_REPO" status --short ;;
+    remote "git -C '$CNC_REPO' status --short 2>/dev/null || echo '(git deposu değil)'" ;;
   ui)
     need_host
     port="${1:-8781}"
     echo "Makinenin arayüzü: http://localhost:$port/  (Ctrl-C bitirir)"
     exec ssh "${SSH_OPTS[@]}" -N -L "127.0.0.1:$port:127.0.0.1:8080" "$CNC_USER@$CNC_HOST" ;;
   *)
-    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    sed -n '2,/^[^#]/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

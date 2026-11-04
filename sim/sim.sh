@@ -89,8 +89,9 @@ case "$cmd" in
       echo "shellcheck: temiz" &&
       sed -e "s|@USER@|cnc|g" -e "s|@HOME@|/home/cnc|g" -e "s|@REPO@|/repo|g" \
           -e "s|@INI@|/repo/configs/test-rig/test-rig.ini|g" -e "s|@PROFILE@|test-rig|g" -e "s|@LAYOUT@|tr|g" \
+          -e "s|@TZ@|Europe/Istanbul|g" \
           deploy/files/bettercnc-kiosk.service.in > /tmp/bettercnc-kiosk.service &&
       systemd-analyze verify /tmp/bettercnc-kiosk.service && echo "servis dosyası: geçerli"' ;;
   *)
-    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    sed -n '2,/^[^#]/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

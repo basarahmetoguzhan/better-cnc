@@ -151,6 +151,17 @@ class TestKioskIni(unittest.TestCase):
         self.assertEqual(err.getvalue().count("\n"), 1, err.getvalue())
         self.assertIn("/nonexistent/m.ini okunamadı", err.getvalue())
 
+    def test_a_source_that_is_not_utf8_is_one_line_too(self):
+        bad = os.path.join(tempfile.mkdtemp(), "m.ini")
+        self.addCleanup(__import__("shutil").rmtree, os.path.dirname(bad))
+        with open(bad, "wb") as fh:
+            fh.write(b"[DISPLAY]\nDISPLAY = axis\n# \xff\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(make_kiosk_ini.main(["x", bad]), 1)
+        self.assertEqual(err.getvalue().count("\n"), 1, err.getvalue())
+        self.assertIn("okunamadı", err.getvalue())
+
     def test_gitignored(self):
         self.assertIn("configs/**/*-kiosk.ini", read(".gitignore"))
         self.assertIn("deploy/machine.local", read(".gitignore"))
@@ -311,9 +322,18 @@ class TestBootPageEntryPoint(unittest.TestCase):
         self.assertIn("http://127.0.0.1:8079/", err.getvalue())
 
     def test_a_ui_url_that_could_close_the_script_is_refused_before_binding(self):
-        with self.assertRaises(ValueError):
-            B.main(["--ui-url", "http://x/</script><script>alert(1)//"])
+        for url in ("http://x/</script><script>alert(1)//", "http://x/<!--"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                B.main(["--ui-url", url])
         self.assertEqual(self.bound, [])
+
+    def test_the_boot_page_navigates_once(self):
+        """Every tick used to call location.replace() again while the first
+        navigation was still loading (audit 2026-10-21)."""
+        page = B.render("x", "http://127.0.0.1:8080/")
+        self.assertIn("if (s.ui_up && !leaving) {", page)
+        # and tried again later: Esc stops a load, and nothing else would retry
+        self.assertIn("setTimeout(function () { leaving = false; }, 5000);", page)
 
     def test_never_imports_linuxcnc_or_hal(self):
         """It must outlive every LinuxCNC run; the UI dies with each one."""
@@ -379,9 +399,10 @@ class TestScreen(unittest.TestCase):
         self.sent = []
 
         def record(method, params=None):
+            self.screen._sent += 1              # as the real send() numbers them
             if method != "Target.getTargets":   # asked on every look
                 self.sent.append((method, params or {}))
-            return len(self.sent)
+            return self.screen._sent
 
         self.screen.send = record
 
@@ -485,6 +506,7 @@ class TestScreen(unittest.TestCase):
         self.assertEqual(self.sent, [("Target.createTarget", {"url": self.BOOT}),
                                      ("Target.closeTarget", {"targetId": "w"})])
         self.sent.clear()
+        self.now[0] += W.REPLACE_AGAIN_S   # (the wait tab still listed: throttled)
         self.assertEqual(self.screen.guard(True, True), ["arayüze dönüldü"])
         self.assertEqual(self.sent[0], ("Target.createTarget", {"url": self.UI}))
 
@@ -495,6 +517,35 @@ class TestScreen(unittest.TestCase):
         self.screen.handle({"method": "Target.targetDestroyed", "params": {"targetId": "gone"}})
         self.now[0] += 10
         self.assertEqual(self.screen.guard(True, True), [])
+
+    def test_each_look_asks_for_the_tab_list_under_its_own_id(self):
+        """The answer is matched to the look by id (audit 2026-10-21: the
+        fake send did not number its messages, so nothing checked this)."""
+        self.screen.guard(True, True)
+        self.assertEqual(self.screen._asked, {self.screen._sent})
+        self.assertEqual(self.screen.unanswered(), 1)
+        self.screen.handle({"id": self.screen._sent, "result": {"targetInfos": [
+            {"targetId": "ui", "type": "page", "url": self.UI, "title": "better-cnc · x"}]}})
+        self.assertEqual(self.screen.unanswered(), 0)
+        self.assertEqual(list(self.screen._tabs), ["ui"])
+
+    def test_two_of_our_pages_keep_the_newest(self):
+        """A replacement opened while the tab list still showed the tab it
+        replaced left two UI tabs, each polling, for the browser's life."""
+        self.tab("old", self.UI, "better-cnc · x")
+        self.tab("new", self.UI, "better-cnc · x")
+        self.assertEqual(self.screen.guard(True, True), ["fazla sekme kapatıldı (1)"])
+        self.assertEqual(self.sent, [("Target.closeTarget", {"targetId": "old"})])
+
+    def test_the_way_back_from_the_wait_page_is_throttled_too(self):
+        self.tab("w", W.WAIT_URL, "better-cnc · bekleyin")
+        self.assertEqual(self.screen.guard(True, True), ["arayüze dönüldü"])
+        self.sent.clear()
+        self.now[0] += W.GUARD_EVERY_S          # the closed tab still listed
+        self.assertEqual(self.screen.guard(True, True), [])
+        self.assertEqual(self.sent, [])
+        self.now[0] += W.REPLACE_AGAIN_S
+        self.assertEqual(self.screen.guard(True, True), ["arayüze dönüldü"])
 
     def test_titles_come_from_the_tab_list_not_the_events(self):
         """In sim/ the discovery events never reported a loaded page's real
@@ -544,6 +595,21 @@ class TestScreen(unittest.TestCase):
         self.assertNotIn("<script", page)
         self.assertNotRegex(page, r'(src|href)="(?!#)')
         self.assertIn('install -D -m 0644 "$FILES/wait.html" "$WAIT_PATH"', read("deploy/kiosk.sh"))
+
+    def test_a_tab_list_answer_over_the_real_pipe_updates_the_table(self):
+        del self.screen.send  # the real one again
+        self.screen.guard(True, True)
+        asked = [json.loads(m) for m in os.read(self.cmd_r, 65536).split(b"\0") if m]
+        look = next(m for m in asked if m["method"] == "Target.getTargets")
+        answer = {"id": look["id"], "result": {"targetInfos": [
+            {"targetId": "t9", "type": "page", "url": self.UI, "title": "better-cnc · x"}]}}
+        os.write(self.ev_w, json.dumps(answer).encode() + b"\0")
+        for _ in range(200):
+            if self.screen._tabs:
+                break
+            __import__("time").sleep(0.005)
+        self.assertEqual(self.screen._tabs["t9"]["title"], "better-cnc · x")
+        self.assertEqual(self.screen.unanswered(), 0)
 
     def test_over_the_real_pipe(self):
         """Framing as Chromium's --remote-debugging-pipe: JSON, NUL-ended."""
@@ -678,6 +744,12 @@ class TestWatch(unittest.TestCase):
 
     def test_a_dead_page_is_restarted_but_not_during_grace(self):
         """The renderer crashed: the process lives, nothing asks any server."""
+        # alive until just under GRACE_S: a watch without the grace would have
+        # judged the never-asked page stale from STALE_S on
+        proc = _Proc(polls=int(W.GRACE_S / W.GUARD_EVERY_S) - 2)
+        checks = int(W.GRACE_S / W.CHECK_EVERY_S)
+        n, err = self.run_watch([proc], [(W.NEVER, W.NEVER)] * checks, starts=1)
+        self.assertFalse(proc.terminated, err)        # not during the grace
         proc = _Proc()
         checks = int(W.GRACE_S / W.CHECK_EVERY_S) + 2
         n, err = self.run_watch([proc], [(W.NEVER, W.NEVER)] * checks, starts=1)
@@ -698,6 +770,25 @@ class TestWatch(unittest.TestCase):
         self.assertFalse(proc.terminated, err)
         self.assertNotIn("sormadı", err)
 
+    def test_a_ui_back_after_a_short_outage_is_not_judged_before_it_is_asked(self):
+        """A fresh UI answers /healthz with client_age_s null (NEVER) until
+        the page's next poll; the page is still on it, the boot screen was
+        last asked long ago. Audit 2026-10-21: NEVER counted as "stale" and
+        the browser was restarted in that second."""
+        checks = int(W.GRACE_S / W.CHECK_EVERY_S) + 1
+        answers = [(1.0, W.NEVER)] * checks          # normal running
+        answers += [(None, 600.0)] * 4               # UI away 8 s: under BOOT_MS
+        answers += [(W.NEVER, 600.0)] * 2            # UI back, not yet asked
+        answers += [(1.0, 600.0)] * 4                # the page asks it again
+        proc = _Proc(polls=int(len(answers) * W.CHECK_EVERY_S / W.GUARD_EVERY_S) + 4)
+        n, err = self.run_watch([proc], answers, starts=1)
+        self.assertFalse(proc.terminated, err)
+        # but a fresh server nobody asks for STALE_S is still a dead page
+        answers = [(1.0, W.NEVER)] * checks + [(W.NEVER, 600.0)] * 8
+        proc = _Proc()
+        n, err = self.run_watch([proc], answers, starts=1)
+        self.assertTrue(proc.terminated)
+
     def test_a_page_that_dies_while_the_ui_is_away_is_restarted(self):
         proc = _Proc()
         checks = int(W.GRACE_S / W.CHECK_EVERY_S) + 1
@@ -711,6 +802,107 @@ class TestWatch(unittest.TestCase):
         self.assertFalse(proc.terminated)
         self.assertNotIn("sormadı", err)
 
+    def test_a_browser_that_answers_nothing_on_the_pipe_is_restarted(self):
+        clock = [0.0]
+
+        class Mute:
+            def wait(self, s):
+                clock[0] += s
+
+            def guard(self, ui_up, boot_up):
+                return []
+
+            def unanswered(self):
+                return W.STUCK_LOOKS + 1
+
+            def close(self):
+                pass
+
+        proc = _Proc()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            W.watch(["b"], "ui", "boot", start=lambda cmd: (proc, Mute()),
+                    ask=lambda url: 1.0, clock=lambda: clock[0],
+                    sleep=lambda s: clock.__setitem__(0, clock[0] + s), starts=1)
+        self.assertTrue(proc.terminated)
+        self.assertIn("bekçiye cevap vermiyor", err.getvalue())
+        # but not before GRACE_S: a cold Chromium answers nothing until its
+        # main loop runs (review 2026-10-21: it was cut at 11 s)
+        self.assertGreaterEqual(clock[0], W.GRACE_S)
+        proc = _Proc(polls=int(W.GRACE_S / W.GUARD_EVERY_S) - 2)
+        clock[0] = 0.0
+        with contextlib.redirect_stderr(io.StringIO()):
+            W.watch(["b"], "ui", "boot", start=lambda cmd: (proc, Mute()),
+                    ask=lambda url: 1.0, clock=lambda: clock[0],
+                    sleep=lambda s: clock.__setitem__(0, clock[0] + s), starts=1)
+        self.assertFalse(proc.terminated)
+
+    def test_a_start_that_fails_leaks_no_pipe_ends(self):
+        """start() is retried every second; four pipe ends per failure
+        would have hit the fd limit in minutes (review 2026-10-21)."""
+        before = len(os.listdir("/dev/fd"))
+        for _ in range(3):
+            with self.assertRaises(FileNotFoundError):
+                W.start_browser(["/nonexistent/kiosk-browser", "x"], "http://u/", "http://b/")
+        self.assertEqual(len(os.listdir("/dev/fd")), before)
+
+    def test_a_guard_error_restarts_the_browser_not_the_watch(self):
+        """The browser exits with the watch (the DevTools pipe): a watch that
+        died left the kiosk black until power off (audit 2026-10-21)."""
+        clock = [0.0]
+
+        class Broken:
+            def wait(self, s):
+                clock[0] += s
+
+            def guard(self, ui_up, boot_up):
+                raise RuntimeError("boom")
+
+            def unanswered(self):
+                return 0
+
+            def close(self):
+                pass
+
+        procs = [_Proc(), _Proc(polls=0)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            n = W.watch(["b"], "ui", "boot", start=lambda cmd: (procs.pop(0), Broken()),
+                        ask=lambda url: 1.0, clock=lambda: clock[0],
+                        sleep=lambda s: clock.__setitem__(0, clock[0] + s), starts=2)
+        self.assertEqual(n, 2)
+        self.assertIn("bekçi hatası (RuntimeError: boom)", err.getvalue())
+
+    def test_a_start_that_fails_is_retried(self):
+        clock = [0.0]
+        attempts = [OSError("no pipe"), (_Proc(polls=0), None)]
+
+        def start(cmd):
+            a = attempts.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            n = W.watch(["b"], "ui", "boot", start=start, ask=lambda url: 1.0,
+                        clock=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s),
+                        starts=2)
+        self.assertEqual(n, 2)
+        self.assertIn("tarayıcı başlatılamadı (OSError: no pipe)", err.getvalue())
+
+    def test_a_server_dying_mid_answer_is_no_answer_not_a_crash(self):
+        """http.client.BadStatusLine / IncompleteRead are neither OSError nor
+        URLError; the UI dies mid-answer whenever LinuxCNC stops."""
+        hc = importlib.import_module("http.client")
+        self.addCleanup(setattr, urllib.request, "urlopen", urllib.request.urlopen)
+        for exc in (hc.BadStatusLine("NOT HTTP"), hc.IncompleteRead(b"")):
+            def boom(*a, **k):
+                raise exc
+            urllib.request.urlopen = boom
+            self.assertIsNone(W.client_age("http://x/healthz"))
+            self.assertFalse(B.ui_is_up("http://x/"))
+
     def test_the_screen_guard_hears_which_server_answers(self):
         clock = [0.0]
 
@@ -723,6 +915,9 @@ class TestWatch(unittest.TestCase):
             def guard(self, ui_up, boot_up):
                 self.calls.append((ui_up, boot_up))
                 return ["arayüz açıldı"] if len(self.calls) == 3 else []
+
+            def unanswered(self):
+                return 0
 
             def close(self):
                 FakeScreen.closed = True
@@ -869,6 +1064,35 @@ class TestWatch(unittest.TestCase):
                 row = next(r for r in table.splitlines() if r.startswith("| `{}`".format(name)))
                 self.assertIn("| {} |".format(value), row)
                 self.assertEqual(float(value.split()[0].replace(",", ".")), getattr(W, name))
+        stuck = next(r for r in table.splitlines() if r.startswith("| `STUCK_LOOKS`"))
+        self.assertIn("| {} bakış = {:g} s |".format(W.STUCK_LOOKS, W.STUCK_LOOKS * W.GUARD_EVERY_S), stuck)
+        # the adapter's rows too
+        from bettercnc import adapter as A
+        for name, value in {"LOOP_STALL_S": "2 s", "HALCMD_TIMEOUT_S": "2 s", "LINK_SETTLE_S": "0,5 s"}.items():
+            with self.subTest(name=name):
+                row = next(r for r in table.splitlines() if r.startswith("| `{}`".format(name)))
+                self.assertIn("| {} |".format(value), row)
+                self.assertEqual(float(value.split()[0].replace(",", ".")), getattr(A, name))
+
+    def test_the_sim_link_stub_names_the_pins_the_adapter_reads(self):
+        """sim/hm2_link_stub.py stands in for the three HAL items; its names
+        were tied to the adapter's only by hand (audit 2026-10-21)."""
+        from bettercnc.state import LinkHealth
+        stub = read("sim/hm2_link_stub.py")
+        prefix = re.search(r'^COMPONENT = "([^"]+)"', stub, re.M).group(1)
+        for const, kind in (("HAL_PACKET_ERROR_TOTAL", "newpin"), ("HAL_WATCHDOG_HAS_BIT", "newpin"),
+                            ("HAL_IO_ERROR", "newparam")):
+            full = getattr(LinkHealth, const)
+            self.assertTrue(full.startswith(prefix + "."), full)
+            self.assertIn('comp.{}("{}"'.format(kind, full[len(prefix) + 1:]), stub)
+        # and plays the driver: io_error on a cable pull, has_bit after the clear
+        self.assertIn('comp["io_error"] = 1', stub)
+        self.assertIn('comp["watchdog.has_bit"] = 1', stub)
+
+    def test_linuxcnc_is_started_without_display_or_tty(self):
+        """linuxcnc.in opens Tk dialogs with DISPLAY and waits for typed
+        answers with a tty (kiosk-session's own comment); pinned here."""
+        self.assertIn('env -u DISPLAY setsid linuxcnc "$KIOSK_INI" < /dev/null', read("deploy/kiosk-session"))
 
     def test_never_imports_linuxcnc_or_hal(self):
         src = read("ui/bettercnc/browserwatch.py")
@@ -924,6 +1148,11 @@ class TestKioskRulesInTheScripts(unittest.TestCase):
         self.assertIn("--adapter linuxcnc --host 127.0.0.1", display)
         self.assertIn("--boot-url", display)
         self.assertIn("exec python3 -m bettercnc.app", display)
+        # the INI LinuxCNC runs, and a 30 s deadline rather than 30 tries
+        self.assertIn('args+=(--ini "$INI")', display)
+        self.assertIn('if [ "$1" = -ini ]; then INI="$2"; break; fi', display)
+        self.assertIn("deadline=$((SECONDS + 30))", display)
+        self.assertNotIn("seq 1 30", display)
 
     def test_no_page_is_offered_for_translation(self):
         """In sim/ the kiosk's Chromium offered to translate the boot screen
@@ -943,6 +1172,61 @@ class TestKioskRulesInTheScripts(unittest.TestCase):
         self.assertIn("PasswordAuthentication no", boot)
         self.assertIn("KbdInteractiveAuthentication no", boot)
         self.assertIn("PermitRootLogin no", boot)
+        # Debian starts sshd on install, password login on: the keys and the
+        # key-only config come BEFORE the install, and the running daemon is
+        # checked after (audit 2026-10-21).
+        self.assertLess(boot.index(".keys"), boot.index("apt-get install"))
+        self.assertLess(boot.index("PasswordAuthentication no"), boot.index("apt-get install"))
+        self.assertIn("sshd -T", boot)
+        self.assertLess(boot.index("systemctl restart ssh"), boot.index("sshd -T"))
+
+    def test_sync_leaves_the_plan_and_the_machine_address_on_the_mac(self):
+        machine = read("deploy/machine.sh")
+        self.assertIn("--exclude docs/PLAN-BUGUN.md", machine)
+        self.assertIn("--exclude deploy/machine.local", machine)
+        # bootstrap's server is a background job: Ctrl-C does not reach it
+        self.assertIn("""trap 'kill "$srv" 2>/dev/null; rm -rf "$dir"' EXIT""", machine)
+
+    def test_the_session_can_stop_what_it_started(self):
+        """The linuxcnc script handles TERM only once its foreground display
+        exits; the boot screen's subshell died without its python."""
+        session = read("deploy/kiosk-session")
+        self.assertIn("setsid linuxcnc", session)
+        self.assertIn("""pkill -TERM -s "$LCNC_PID" -f 'bettercnc-display|bettercnc\\.app'""", session)
+        # the INI-error pause is stoppable too, and last-stop.txt is this session's
+        self.assertEqual(session.count('SLEEP_PID=$!'), 2)
+        self.assertIn('rm -f "$BETTERCNC_LAST_STOP_FILE"', session)
+        self.assertIn("""trap 'kill "$child" 2>/dev/null; exit 0' TERM INT HUP""", session)
+        self.assertIn('export BETTERCNC_INI="$BASE_INI"', session)
+        # the browser exits with its watch: the watch is in a loop too
+        self.assertIn("tarayıcı bekçisi durdu — yeniden başlatılıyor", session)
+        # why it last stopped reaches the new UI (the boot screen's line lives RESTART_S)
+        self.assertIn('export BETTERCNC_LAST_STOP_FILE="$RUN/last-stop.txt"', session)
+        self.assertIn("Önceki durma:", session)
+        self.assertIn('--startup-note-file "$BETTERCNC_LAST_STOP_FILE"', read("deploy/bettercnc-display"))
+        # the linuxcnc script's own output is not in $LOG without a tty
+        self.assertIn("linuxcnc_print.txt", session)
+
+    def test_enable_now_survives_the_desktop_it_stops(self):
+        kiosk = read("deploy/kiosk.sh")
+        self.assertIn("systemd-run", kiosk)
+        self.assertIn("sh -c \"systemctl stop '$dm' && systemctl start '$UNIT'\"", kiosk)
+        self.assertIn("systemd-run --quiet --collect", kiosk)   # a failed switch must not block the next
+
+    def test_usage_texts_end_with_the_header(self):
+        """The usage text is the header comment; a fixed line range printed
+        code once the header grew (audit 2026-10-21)."""
+        for script in ("deploy/machine.sh", "deploy/kiosk.sh", "sim/sim.sh"):
+            with self.subTest(script=script):
+                self.assertIn("""sed -n '2,/^[^#]/p' "$0" | sed '$d; s/^# \\{0,1\\}//'""", read(script))
+                out = __import__("subprocess").run(["bash", os.path.join(REPO_ROOT, script)],
+                                     capture_output=True, text=True)
+                self.assertEqual(out.returncode, 2)
+                self.assertNotIn("set -euo", out.stdout)
+                lines = read(script).split("\n")
+                end = next(i for i in range(1, len(lines)) if not lines[i].startswith("#"))
+                self.assertEqual(out.stdout.rstrip("\n").split("\n")[-1].strip(),
+                                 lines[end - 1].lstrip("#").strip())
 
     def test_board_link_never_takes_the_default_route(self):
         self.assertIn("ipv4.never-default yes", read("deploy/kiosk.sh"))
@@ -1103,6 +1387,18 @@ class TestKioskLayersInThePages(unittest.TestCase):
         self.assertIn("Environment=XKB_CONFIG_EXTRA_PATH=@REPO@/deploy/files/xkb", unit)
         self.assertIn("Environment=XKB_DEFAULT_OPTIONS=bettercnc:kiosk", unit)
         self.assertIn("Environment=XKB_DEFAULT_LAYOUT=@LAYOUT@", unit)
+
+    def test_the_service_waits_for_no_network_and_keeps_local_time(self):
+        unit = read("deploy/files/bettercnc-kiosk.service.in")
+        directives = [l for l in unit.splitlines() if l and not l.startswith("#")]
+        self.assertFalse([l for l in directives if "network" in l], directives)
+        self.assertIn("Environment=TZ=@TZ@", unit)
+        kiosk = read("deploy/kiosk.sh")
+        self.assertIn("--tz) tz=", kiosk)
+        self.assertIn('-e "s|@TZ@|$tz|g"', kiosk)
+        self.assertIn('[ -f "/usr/share/zoneinfo/$tz" ] || die', kiosk)   # glibc falls back to UTC silently
+        self.assertIn("TZ=%s", kiosk)
+        self.assertIn("@TZ@", read("sim/sim.sh"))
 
 
 if __name__ == "__main__":

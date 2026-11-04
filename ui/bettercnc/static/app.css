@@ -273,6 +273,12 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
    Covers the whole screen: the values under it are stale and must not read
    as live. */
 
+.lost-estop {
+  margin-top: 28px; padding: 16px 28px; font: inherit; font-size: 18px; font-weight: 700;
+  letter-spacing: .06em; color: #fff; background: var(--bad);
+  border: 2px solid #fff; border-radius: 6px; cursor: pointer;
+}
+.lost-sent { margin-top: 14px; font-size: 15px; color: #f0a92b; max-width: 640px; }
 .lost {
   position: fixed; inset: 0; z-index: 1000;
   display: flex; flex-direction: column; align-items: center; justify-content: center;

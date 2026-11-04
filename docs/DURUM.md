@@ -1,6 +1,6 @@
 # Nerede Kaldık — Oturum Durumu
 
-Son güncelleme: **2026-10-18** (doküman düzeltmeleri + en alttaki Zhulong kararı; makine durumu 2026-08-05 gecesinden, dokümandaki homing sırası 2026-08-23'te INI'ye göre düzeltildi)
+Son güncelleme: **2026-10-21** (en alttaki tarihli notlar; makine durumu 2026-08-05 gecesinden, dokümandaki homing sırası 2026-08-23'te INI'ye göre düzeltildi)
 
 Bu dosya oturumlar arası hafıza. Devam ederken **ilk bunu oku.**
 
@@ -197,3 +197,4 @@ ondan sonra geçilecek.
 - **2026-10-20:** Kiosk (güç → LinuxCNC → bizim arayüz, çıkış yok) ve Mac'ten SSH erişimi hazır: [`deploy/`](../deploy/README.md), simülatörde denendi. Makinede **henüz kurulmadı**; ilk adım makine başında bir kez SSH kurulumu (`deploy/machine.sh bootstrap`). Kiosk test tezgahında Faz 1–9 bitmeden açılmayacak (axis gerekiyor). SSH kurulduktan sonra açılıştaki `git pull` bırakılır; kod `deploy/machine.sh sync` ile gider.
 - **2026-10-20 (öğleden sonra):** Kartla bağlantı koparsa (watchdog) artık LinuxCNC'yi yeniden başlatmak gerekmiyor: «Yazılım sıfırla» bağlantıyı yeniden kurar ve **referansları siler** (konum kaymış olabilir). Ekrandaki "watchdog/io_error" ifadeleri operatörün anlayacağı dile çevrildi. Simülatörde gerçek `halcmd` ile denendi; makinede ilk denemesi bekleniyor.
 - **2026-10-20 (gece):** Kiosk'ta operatör tarayıcıyı görmüyor: Tab da kapatıldı (odak çerçevesi tarayıcıyı ele veriyordu), ipucu balonları kaldırıldı. Chromium'un kendi sayfaları ("Aw, Snap", "bağlanılamıyor") değiştirilemiyor; ekran bekçisi (`browserwatch`) onları hemen arayüzle, başlatma ekranıyla ya da "Bir hata oluştu — lütfen bekleyin" sayfasıyla değiştiriyor. Simülatörde sekme çökünce ~80 ms'de arayüz geri geldi, "Aw, Snap" hiçbir karede yok. Makinede ilk kurulumda bakılacak.
+- **2026-10-21 (denetim):** efe6de4 denetlendi (13 alan, her bulgu iki bağımsız çürütücüyle). En önemlisi: gerçek sürücü kablo kopunca `has_bit` değil `io_error` kaldırıyor; makine AÇIK kalıyordu ve «Yazılım sıfırla» hiçbir şeyi temizlemeyecekti — simülatörün taklidi tersini yapıyordu. Düzeltildi (arayüz bağlantı kopunca makineyi 1 s içinde acil stopa alıyor; sıfırlama gerçek sıralamayla), taklit gerçeğe çevrildi, simülatörde gerçek `halcmd` ile yeniden doğrulandı. Ayrıca: takılma dedektörü program koşarken yanlış alarm verebilirdi (CPU zamanı eklendi); SSH kurulumu sshd'yi anahtarlar gelmeden açıyordu (sıra değişti); bekçi kendi hatasında ölünce tarayıcı da çıkıyordu (döngü + hata yakalama); durma sebebi operatöre ulaşmıyordu (yeni arayüzün ilk mesajı). Makinede henüz hiçbiri denenmedi.

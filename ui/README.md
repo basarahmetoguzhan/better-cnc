@@ -68,8 +68,8 @@ make test-v          # ayrıntılı
 make coverage        # satır kapsaması (stdlib, `coverage` paketi gerekmiyor)
 ```
 
-808 test (49'u `scripts/test_grbl2ini.py`), hepsi geçiyor, beklenen başarısızlık
-yok. Kapsama **%99.5**; `adapter.py` %99.1, `mdi.py` %100. `make coverage` paketteki
+842 test (49'u `scripts/test_grbl2ini.py`), hepsi geçiyor, beklenen başarısızlık
+yok. Kapsama **%99.5**; `adapter.py` %99.0, `mdi.py` %100. `make coverage` paketteki
 modülleri dizinden bulur, yeni bir modül listeden düşemez.
 
 `reference/` (gitignore'daki LinuxCNC 2.9 klonu) varsa 20 doğruluk testi sahteyi

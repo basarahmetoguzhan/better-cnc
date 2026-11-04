@@ -45,7 +45,18 @@ güç → laptop: BIOS USB'den / Pi: SD'den → Linux → systemd
 - **Bağlantı koparsa** arayüz donmaz. 3 s içinde ekranı "BAĞLANTI YOK — ekrandaki
   değerler ESKİ" ile örter, 10 s sonra başlatma ekranına döner (`app.js`). Başlatma
   ekranı o an cevap vermiyorsa gitmez, örtülü bekler; yoksa Chromium'un
-  "bağlanılamıyor" sayfası görünürdü.
+  "bağlanılamıyor" sayfası görünürdü. Örtünün üstünde «YAZILIM ACİL STOP GÖNDER»
+  düğmesi durur (2026-10-21 denetimi: örtü bu tezgahın tek acil stopunu da
+  kapatıyordu): sunucu ölü değil yavaşsa komut gider — sunucu acil stopu kilit
+  beklemeden işler — ulaşıp ulaşmadığı bilinmiyorsa ekran öyle yazar.
+- **Kontrol sistemi durunca sebebi** başlatma ekranına ve yeni açılan arayüzün ilk
+  mesaj satırına yazılır (`$XDG_RUNTIME_DIR/bettercnc/last-stop.txt`,
+  `app.py --startup-note-file`): başlatma ekranındaki "durdu" satırı yalnız 5 s
+  yaşıyor ve sayfa 10 s'den kısa kesintide başlatma ekranına hiç gitmiyordu, yani
+  operatör sebebi hiç görmüyordu (denetim). LinuxCNC'nin kendi logu: tty'siz
+  çalışırken `/tmp/linuxcnc.print.*` / `.debug.*` (`ls -t | head -1`), hatayla
+  çıkınca `~/linuxcnc_print.txt` ve `~/linuxcnc_debug.txt`; `$RUN/linuxcnc.log`
+  yalnız betiğin ilk satırlarını tutar.
 - LinuxCNC, X ekranı (`DISPLAY`) ve terminal olmadan başlatılır. Aksi hâlde
   LinuxCNC betiği hata ve kilit dosyası durumlarında Tk pencereleri açıp tıklama
   bekler; simülatörde bu yaşandı (`kiosk-session` içindeki yorum).
@@ -59,9 +70,9 @@ diğeri atlatılsa da tutacak şekilde:
 
 | Katman | Ne yapar | Nasıl sınandı |
 |---|---|---|
-| **Klavye haritası** (`files/xkb`, XKB seçeneği `bettercnc:kiosk`) | Ctrl, Alt, Windows, Menü, F1–F24 ve tarayıcı tuşları (Geri, İleri, Yenile, Ana sayfa, Ara, Kapat…) **hiçbir şey üretmez**. Ctrl+T, Ctrl+N, Ctrl+L, Ctrl+W, Alt+F4, F5, F11, F12 yazılamaz. Tab da üretmez: odağı düğmeden düğmeye gezdirip sayfanın tarayıcı olduğunu ele verirdi. Harfler, rakamlar, Enter, Backspace çalışır; Sağ Alt yalnız AltGr'dır (Türkçe klavyede MDI için `#` `[` `]`) | libxkbcommon'un kendisiyle: harita derlenip tuşlara "basılıyor" (`test_deploy.TestKioskKeymap`, konteynerde koşar) |
-| **Sayfa** (`app.js`, başlatma ekranı; yalnız kiosk modunda) | Sağ tık menüsü, sürükleme, seçme, yakınlaştırma, farenin geri/ileri tuşları yok; sayfanın durdurabildiği her kısayol ve Tab durdurulur. Tarayıcı izleri yok: üzerine gelince çıkan ipucu balonları (`title`) kaldırılır, odak çerçevesi çizilmez, imleç hep ok, kaydırma çubuğu arayüzün renginde | Haritayı atlayan sanal klavyeyle (`wtype`) Ctrl+T/N/L/W/P, Ctrl+Shift+I, F11, F12, Alt+F4 gönderildi: ekran değişmedi, tarayıcı kapanmadı. Tuşların gerçekten sayfaya ulaştığı, o sırada engellenmeyen Tab+Enter ile kanıtlandı (Tab sonra kapatıldı) |
-| **Chromium politikası** (`files/chromium-policy.json`) | Yalnız `127.0.0.1:8079`, `:8080` ve bekleme sayfası (`file:///usr/share/bettercnc/wait.html`); `chrome://`, başka `file://`, kaynak görüntüleme yasak. Yeni sekme, yeni pencere ve ana sayfa = bizim başlatma ekranı. Adres çubuğundan arama yok, açılır pencere yok, geliştirici araçları, yazdırma, indirme, çeviri, oturum açma, eklenti yok. Tarayıcının tema rengi arayüzün zemin rengi (`BrowserThemeColor`): yeni açılan sekmenin ilk boş karesi beyaz yerine çoğu zaman koyu lacivert olur | Politika bağlıyken kiosk açıldı ve geçişler çalıştı |
+| **Klavye haritası** (`files/xkb`, XKB seçeneği `bettercnc:kiosk`) | Ctrl, Alt, Windows, Menü, F1–F24 ve tarayıcı tuşları (Geri, İleri, Yenile, Ana sayfa, Ara, Kapat…) **hiçbir şey üretmez**. Ctrl+T, Ctrl+N, Ctrl+L, Ctrl+W, Alt+F4, F5, F11, F12 yazılamaz. Tab da üretmez: odağı düğmeden düğmeye gezdirip sayfanın tarayıcı olduğunu ele verirdi. Harfler, rakamlar, Enter, Backspace çalışır; Sağ Alt yalnız AltGr'dır (Türkçe klavyede MDI için `#` `[` `]`). Kapatma kısayolları (Ctrl+W, Ctrl+F4, Ctrl+Q) burada doğar: harita onları üretmez | libxkbcommon'un kendisiyle: harita derlenip tuşlara "basılıyor" (`test_deploy.TestKioskKeymap`, konteynerde koşar) |
+| **Sayfa** (`app.js`, başlatma ekranı; yalnız kiosk modunda) | Sağ tık menüsü, sürükleme, seçme, yakınlaştırma, farenin geri/ileri tuşları yok; sayfanın durdurabildiği her kısayol ve Tab durdurulur. Tarayıcı izleri yok: üzerine gelince çıkan ipucu balonları (`title`) kaldırılır, odak çerçevesi çizilmez, imleç düz metin üzerinde ok (düğmede el, giriş kutusunda I), kaydırma çubuğu arayüzün renginde | Haritayı atlayan sanal klavyeyle (`wtype`) Ctrl+T/N/L/W/P, Ctrl+Shift+I, F11, F12, Alt+F4 gönderildi: ekran değişmedi, tarayıcı kapanmadı. Tuşların gerçekten sayfaya ulaştığı, o sırada engellenmeyen Tab+Enter ile kanıtlandı (Tab sonra kapatıldı) |
+| **Chromium politikası** (`files/chromium-policy.json`) | Yalnız `127.0.0.1:8079`, `:8080` ve bekleme sayfası (`file:///usr/share/bettercnc/wait.html`); `chrome://`, başka `file://`, kaynak görüntüleme yasak. Yeni sekme, yeni pencere ve ana sayfa = bizim başlatma ekranı. Adres çubuğundan arama yok, açılır pencere yok, geliştirici araçları, yazdırma, indirme, çeviri, oturum açma, eklenti yok. Tarayıcının tema rengi arayüzün zemin rengi (`BrowserThemeColor`): yeni açılan sekmenin ilk boş karesi denemelerin yaklaşık yarısında beyaz yerine koyu lacivert olur | Politika bağlıyken kiosk açıldı ve geçişler çalıştı |
 | **Ekran bekçisi** (`bettercnc.browserwatch`, Chromium'un DevTools borusu) | Chromium'un kendi sayfaları değiştirilemez ("Aw, Snap", "bağlanılamıyor", "engellendi"); bekçi onları ekranda tutmaz. Sekmeleri 0,5 s'de bir, bir sekme çökünce hemen yoklar. Çöken sekme, sunucusu cevap vermeyen bizim adresimizdeki hata sayfası hemen; bizim olmayan başka her sayfa 1,5 s sonra kapatılır. Yerine sırayla: cevap veriyorsa arayüz, değilse başlatma ekranı, o da değilse sunucusuz bekleme sayfası (`files/wait.html`: "Bir hata oluştu — lütfen bekleyin. Ekran kendiliğinden geri gelecek."), o da sunuculardan biri cevap verince geri döner. Boru yalnız bekçinin elinde; ağ portu açılmaz. Politika gereği sayfanın içine girilemez (geliştirici araçları kapalı), yalnız sekme açıp kapatabilir | Simülatörde, ~17 ms arayla ekran görüntüsüyle (aşağıda "Simülatörde denemek") |
 
 Bunlara ek olarak:
@@ -89,14 +100,23 @@ denemelerin yaklaşık yarısında koyu lacivert, yarısında hâlâ beyaz (tema
 10/10 beyazdı). `--force-dark-mode` ve `--default-background-color` hiçbir şey değiştirmedi.
 Tamamen gidermenin yolu bulunamadı. Sekme çökmesi normal çalışmada olmaz.
 
-**Kapatılamaz:** operatörün bir sekmeyi ya da tarayıcıyı kapatma yolu yok (Ctrl+W, Ctrl+F4,
-Alt+F4, Ctrl+Q üç katmanda da kapalı; kapatma düğmesi ve sekme çubuğu yok). Tarayıcı yine
+**Kapatılamaz:** operatörün bir sekmeyi ya da tarayıcıyı kapatma yolu yok: kapatma
+düğmesi ve sekme çubuğu yok; Ctrl+W, Ctrl+F4, Alt+F4 ve Ctrl+Q yazılamaz, çünkü klavye
+haritası Ctrl ve Alt'ı üretmez. Harita atlanarak gönderildiklerinde de (yukarıdaki
+`wtype` denemesi) tarayıcı kapanmadı; bunun sebebi — kiosk modunda Chromium'un yok
+sayması mı, sayfanın engellemesi mi — ayrıştırılmadı, politikada kısayol ayarı yok,
+cage'de Alt+F4 gibi bir pencere yöneticisi kısayolu yok. Olur da kapanırsa bekçi 1 s'de
+yeniden açar. Tarayıcı yine
 de kapanırsa ya da çökerse arkasında masaüstü yok (`kiosk.sh enable` masaüstünü kapatır):
 ekran 1–2 s siyah kalır, tarayıcı kendiliğinden geri gelir. Bekçi kendisi de son sekmeyi
-hiç kapatmaz: önce yenisini açar.
+hiç kapatmaz: önce yenisini açar. Bekçinin kendisi ölürse tarayıcı da çıkar (boru
+kapanır); `kiosk-session` bekçiyi de döngüde tutar ve bekçi kendi hatasını yakalayıp
+tarayıcıyı yeniden açar (denetim 2026-10-21).
 
 Bizim olmayan bir sayfa, bizim sunucularımızın dışında bir adreste açılabilirse (üç
-katman atlatılırsa) en çok 1,5 s görünür.
+katman atlatılırsa) en çok ~2,5 s görünür (0,5 s bakış + bir bakışlık liste gecikmesi +
+1,5 s eşik); bizim hiç sekmemiz kalmamışsa ve son 5 s içinde bir değiştirme yapılmışsa
+`REPLACE_AGAIN_S` dolana kadar.
 
 Kilitli **olmayanlar**: fiziksel erişim (USB bellek, SD kart, BIOS) ve güç anahtarı.
 
@@ -125,6 +145,11 @@ O satırı makinede, normal kullanıcının terminalinde yazın. Betik
 (`bootstrap-ssh.sh`) şunları yapar:
 - SSH sunucusunu kurar.
 - **Şifreyle girişi kapatır.** Live USB'nin şifresi "live", herkesin bildiği bir şifre.
+  Sıra önemli (denetim 2026-10-21): Debian sshd'yi paket kurulur kurulmaz şifreli
+  girişe açık başlatır; betik bu yüzden önce anahtarları çekip anahtar-yalnız ayarı
+  yazar, SONRA paketi kurar ve kurulu yapılandırmanın etkin değerini `sshd -T` ile
+  doğrular (drop-in `Include` ile okunuyor mu) — şifreli giriş açık görünürse sshd'yi
+  durdurup hata verir. Anahtar gelmezse hiçbir şey kurulmaz.
 - GitHub'daki açık anahtarları (`github.com/basarahmetoguzhan.keys`, Mac'inki dahil)
   yetkilendirir.
 - Sonunda kullanıcı adını, adresi ve `sudo`'nun şifre sorup sormadığını basar.
@@ -155,9 +180,12 @@ deploy/machine.sh sync
 deploy/machine.sh sync --apply
 ```
 
-`--apply`, önce makinedeki yerel değişiklikleri `~/better-cnc-yedek/<zaman>/`
-altına yedekler, sonra Mac'teki çalışma ağacını kopyalar:
-- `.git` ve `reference/` kopyalanmaz.
+`--apply`, önce makinedeki çalışma ağacının kendi git HEAD'inden farkını
+`~/better-cnc-yedek/<zaman>/` altına yedekler (ilk sync'ten sonra bu farkın çoğu
+önceki sync'lerin getirdikleridir; makinede elle yapılmış bir değişiklik için
+emniyet ağı, daha incesi değil), sonra Mac'teki çalışma ağacını kopyalar:
+- `.git`, `reference/`, `.claude/`, `deploy/machine.local`, `*-kiosk.ini` ve
+  `docs/PLAN-BUGUN.md` kopyalanmaz (plan, git'e girmediği gibi makineye de gitmez).
 - Makinede hiçbir dosya silinmez.
 
 Makine artık açılışta `git pull` yapmamalı; kod `sync` ile gider.
@@ -181,8 +209,13 @@ zaman varsayılan rota olmaz, yani interneti kesmez.
 sudo deploy/kiosk.sh install
 ```
 
-`cage` ve `chromium` paketlerini, servisi, PAM tanımını, Chromium politikasını ve
-sysctl ayarını kurar. Açılışı değiştirmez.
+`cage`, `chromium` ve DejaVu yazı tipi paketlerini, servisi, PAM tanımını, Chromium
+politikasını, sysctl ve logind ayarlarını, bekleme sayfasını
+(`/usr/share/bettercnc/wait.html`) kurar. Açılışı değiştirmez. Seçenekler: `--user`,
+`--ini`, `--profile`, `--layout` (tr), `--tz` (Europe/Istanbul; ekrandaki alarm
+saatleri bu dilimde — live USB UTC'de çalışır). Servis ağı beklemez
+(`network-online.target` yok: kiosk ağ istemez, beklemek menzil dışı bir Wi-Fi'da
+30–60 s siyah ekran demekti).
 
 ```bash
 sudo deploy/kiosk.sh enable
@@ -253,8 +286,10 @@ Her birinin dayandığı iki sayı:
 | `NOT_OURS_S` (ekran bekçisi) | 1,5 s | Bizim sayfamız yüklenirken başlığı bir an adres olur; yerel sayfalarımız 1 s'nin çok altında yüklenir. Sunucusu cevap vermeyen adresteki hata sayfası bunu beklemez | Yüklenen kendi sayfamız kapatılır / yabancı sayfa daha uzun görünür |
 | `REPLACE_AGAIN_S` (ekran bekçisi) | 5 s | Yerine açılan sekme en çok bu sıklıkla: bekçi bir gün yanılsa bile tarayıcıyı sekmeyle doldurmasın diye. Normalde değiştirme bir kez olur | Yanılan bekçi sekme yağdırır / yanılırsa ekran daha uzun bekler |
 | `BOOT_WAIT_S` (ekran bekçisi) | 5 s | Tarayıcı açılmadan önce başlatma ekranına cevap vermesi için tanınan süre (güç verilince ikisi aynı anda başlar). Cevap gelmezse tarayıcı bekleme sayfasında açılır. Ekran bu arada siyah | Normal açılışta bir an "Bir hata oluştu" görünür / sunucusu bozuksa ekran daha uzun siyah kalır |
-| `LOOP_STALL_S` (adaptör) | 2 s | LinuxCNC'nin görev ve IO döngüleri her turda bir kez uyur; çekirdek bunu sayar (`/proc/PID/status`, simülatörde görev ~87/s, IO ~9/s, donmuş süreç 0). 2 s = görevin 200, IO'nun 20 turu; hiçbir normal tur buna yaklaşmaz. Görevin kendi heartbeat'i Python'a açık olmadığı için onun yerine geçer | Ağır yükte boşuna "cevap vermiyor" / takılan görevle ekran ve e-stop daha uzun "canlı" kalır |
+| `LOOP_STALL_S` (adaptör) | 2 s | LinuxCNC'nin görev ve IO döngüleri her turda bir kez uyur; çekirdek bunu sayar (`/proc/PID/status`, simülatörde görev ~87/s, IO ~9/s, donmuş süreç 0). Görev kuyrukta iş varken uyumaz ("eager", emctaskmain.cc:3593; uzun bir program satırı dizisi bunu sürdürebilir), bu yüzden CPU zamanı (`/proc/PID/stat`) da canlılık sayılır: ne uyuyan ne çalışan süreç takılıdır (denetim 2026-10-21). 2 s = görevin 200, IO'nun 20 turu. Görevin kendi heartbeat'i Python'a açık olmadığı için onun yerine geçer. `rtapi_app` yalnız var/yok diye izlenir: `/proc` ana iş parçacığını sayar, o da gerçek zamanlı iş parçacığı çalışırken boşta durur | Ağır yükte boşuna "cevap vermiyor" / takılan görevle ekran ve e-stop daha uzun "canlı" kalır |
 | `HALCMD_TIMEOUT_S` (adaptör) | 2 s | `halcmd` onlarca milisaniyede cevap verir; uzarsa HAL kilidi başkasındadır | Yavaş Pi'de bağlantı sıfırlama boşuna "olmadı" der / takılan `halcmd` sıfırlamayı 2 s'den fazla tutar |
+| `LINK_SETTLE_S` (adaptör) | 0,5 s | `io_error` temizlenince sürücü kartı yeniden okur: kartın kaydettiği ısırık (`has_bit`) bir-iki servo periyodunda gelir, kablo hâlâ yoksa `io_error` 5 kayıp pakette (5 ms) geri gelir; 0,5 s ikisinin yüzlerce katı | Isırık gelmeden devam edilir, mandal sıfırlamanın ortasında düşer / sıfırlama boşuna uzar |
+| `STUCK_LOOKS` (ekran bekçisi) | 20 bakış = 10 s | Tarayıcı boruya hiç cevap vermiyorsa (ana iş parçacığı takılı, sayfa hâlâ soruyor olabilir) `STALE_S` kadar beklenir, sonra yeniden açılır; ölü sayfa gibi ancak `GRACE_S`'den sonra (soğuk Chromium ana döngüsü çalışana dek boruya cevap vermez) | Yüklü anda boşuna yeniden açılır / takılı tarayıcı daha uzun kalır |
 
 ### LinuxCNC ve kart (değiştirmedik; sürücülerin kendi değerleri)
 
@@ -299,9 +334,15 @@ ile doğrular.
 - Tarayıcı öldürülünce yeniden açılıyor.
 - INI yoksa başlatma ekranı sebebi tek satır yazıyor.
 - Politika dosyası bağlıyken geçiş çalışıyor.
-- Kart bağlantısı (gerçek `halcmd` ile): koptu → düz Türkçe talimat; «Yazılım sıfırla» →
-  bağlantı kuruldu, referanslar silindi; kablo hâlâ yoksa (`sim-link-down`) "bağlantı
-  kurulamadı"; `io_error` da temizleniyor.
+- Kart bağlantısı (gerçek `halcmd` ile, 2026-10-21'den itibaren gerçek sürücü gibi
+  canlandırılıyor — kablo çıkınca `has_bit` değil `io_error` kalkar, mandal düşmez,
+  LinuxCNC AÇIK der; taklidin ilk sürümü tersini yapıyordu ve sıfırlama makinede
+  "zaten açık" deyip hiçbir şeyi temizlemeyecekti): kablo çıkınca arayüz 1 s içinde
+  makineyi acil stopa alıp "Kartla bağlantı koptu — makine durduruldu" diyor; kablo
+  hâlâ yokken «Yazılım sıfırla» → "bağlantı kurulamadı" (`io_error` 5 ms'de geri
+  geliyor); kablo takılıp sıfırlayınca `io_error` temizleniyor, sürücünün o an
+  bulduğu ısırık (`has_bit`) temizleniyor, referanslar siliniyor, makine açılıyor
+  ("bağlantı yeniden kuruldu"); sıfırlama 0,5–0,8 s sürüyor.
 - LinuxCNC'nin görev süreci öldürülünce arayüz 3,85 s'de kapandı, kiosk temiz başlattı;
   başlatma ekranında "Makinenin kontrol sistemi durdu: LinuxCNC'nin bir parçası çalışmıyor
   (milltask)". Tarayıcı yeniden başlatılmadı.
@@ -317,6 +358,10 @@ ile doğrular.
   kontrolünden sonra ~0,3 s görünüyordu; tarayıcı artık cevap vermeyen başlatma ekranında
   açılmıyor).
 - Normal açılış: siyah → başlatma ekranı → arayüz; bekleme sayfası görünmüyor.
+- 2026-10-21 (denetim sonrası): bekçi öldürülünce `kiosk-session` 1 s'de yeniden başlattı,
+  tarayıcı geri geldi; arayüz öldürülünce `last-stop.txt` yazıldı ve başlatma ekranı
+  "başlatılıyor (deneme 2). Önceki durma: …" dedi; `kiosk-down` (TERM) 1 s'de bitti
+  (eskiden 10 s sonra SIGKILL).
 - Geçişler kare kare (~17 ms): arayüz → örtü → başlatma ekranı → arayüz (arayüz `SIGSTOP`/`SIGCONT`)
   ara karesiz. Tarayıcı yeniden açılışı: siyah → tek boş kare → başlatma ekranı → arayüz. Bekçi
   durdurulup sekme çöktürülünce Chromium "Aw, Snap"ı ~66 ms'de çiziyor; bekçi varken o çizilmeden
