@@ -1,8 +1,8 @@
 # 09 — TB6560 Sürücüler: Bağlantı, Zamanlama, Hız Tavanı
 
 Durum: sürücü modeli **OBSERVED** (kullanıcı doğruladı, fotoğrafta 4 adet
-TB6560 kartı Zhulong'a bağlı). Zamanlama değerleri **INFERRED** — ilk testte
-ölçülerek doğrulanacak.
+TB6560 kartı Zhulong'a bağlı). Zamanlama değerleri **INFERRED** — scope ile
+ölçülerek doğrulanacak (2026-10-18: config çalıştı, zamanlama henüz ölçülmedi).
 
 ---
 
@@ -18,9 +18,9 @@ SCALE_yeni = SCALE_eski × (mikroadım_yeni ÷ mikroadım_eski)
 Örnek: eski sürücü 1/16'daysa ve TB6560'ı 1/8'e kurarsan, `SCALE` **yarıya**
 iner (833.3 → 416.65).
 
-**Eski sürücünün mikro adım jumper konumunu TB6560'a geçmeden önce not al.**
+**Eski sürücünün mikro adım jumper konumunu TB6560'a geçmeden önce not al.** (2026-10-18: geçiş yapıldı, eski jumper konumu kayıtlı değil — T5 açık.)
 Not alınmadıysa telafisi ampirik: 100 mm komut ver, gerçek mesafeyi ölç, oranla
-düzelt.
+düzelt (mesafe strokun elverdiği kadar). Şimdi geçerli yol bu: [PLAN-BUGUN.md](PLAN-BUGUN.md) Faz 3.
 
 ---
 

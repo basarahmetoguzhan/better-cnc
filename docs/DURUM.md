@@ -1,6 +1,6 @@
 # Nerede Kaldık — Oturum Durumu
 
-Son güncelleme: **2026-08-05, gece**
+Son güncelleme: **2026-10-18** (doküman düzeltmeleri + en alttaki Zhulong kararı; makine durumu 2026-08-05 gecesinden, dokümandaki homing sırası 2026-08-23'te INI'ye göre düzeltildi)
 
 Bu dosya oturumlar arası hafıza. Devam ederken **ilk bunu oku.**
 
@@ -9,7 +9,7 @@ Bu dosya oturumlar arası hafıza. Devam ederken **ilk bunu oku.**
 ## Tek satırlık özet
 
 Zhulong kartı tamamen çözüldü ve LinuxCNC'de çalışıyor. **Üç eksen de jog ediyor.**
-Tek açık arıza: **Y ekseninin DIR kablosu** — yön değişmiyor, hep öne gidiyor.
+Tek açık arıza: **Y ekseninin DIR hattı** (yeri — kart klemensi, kablo ya da sürücü — henüz ölçülmedi; `PLAN-BUGUN.md` Faz 1) — yön değişmiyor, hep öne gidiyor.
 
 ---
 
@@ -85,7 +85,7 @@ num_stepgens=3 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx
 
 ## Makine parametreleri
 
-GRBL EEPROM'undan (`docs/07`), ampirik kalibre edilmiş, **güvenilir**:
+GRBL EEPROM'undan (`docs/07`), GRBL altında ampirik kalibre edilmiş görünüyor, ama bu kurulumda (LinuxCNC + TB6560, mikro adım farklı olabilir) **henüz doğrulanmadı** (`PLAN-BUGUN.md` Faz 3):
 
 ```
 SCALE   X = 833.300    Y = 823.500    Z = 1250.000   adım/mm
@@ -118,17 +118,17 @@ Hız istenirse mikro adımı düşürmek gerekiyor (`docs/09`).
 
 ---
 
-## Sıradaki adımlar
+## Sıradaki adımlar (güncel sıra ve kapılar `PLAN-BUGUN.md`'de: ölçek ve strok, switch net'lerinden önce)
 
-**1. Y ekseni DIR kablosu.** AXIS 1 bloğunda (`GND STEP DIR 5V`) DIR kablosunu kontrol et.
+**1. Y ekseni DIR hattı.** AXIS 1 bloğunda (`GND STEP DIR 5V`) DIR kablosunu ve bağlantısını kontrol et.
 Y'nin TB6560'ında `CW−` bağlı mı, `CW+` 5V'a gidiyor mu. X ve Z ile karşılaştır.
-Multimetreyle: AXIS 1 `DIR` ↔ `GND` arası Y+/Y− jog'da 0V↔5V değişiyor mu.
+Multimetreyle: AXIS 1 `DIR` ↔ `GND` arası Y+/Y− jog'da 0V↔5V değişiyor mu. ⚠ İki jog da Y'yi öne sürer ve limit bağlı değil: Y arkadayken başla, kısa jog, el güç anahtarında.
 
 **2. Y yönü belirlenince** switch'lerin + / − limit ataması netleşir.
 
-**3. HAL'de switch net'lerini bağla** (şu an yorum satırı):
+**3. HAL'de switch net'lerini bağla** — ⚠ güncel sırada ölçek (4) ve strok (5) **bundan önce** yapılır (`PLAN-BUGUN.md` Faz 3–5); şu an yorum satırı, `.in_not` ile:
 ```
-gpio.020 → X pozitif uç      gpio.021 → X negatif uç
+gpio.021 → X home + negatif uç (sol)      gpio.020 → X pozitif uç (sağ)
 gpio.022/023 → Y (yön belli olunca)
 gpio.024 → Z home + pozitif limit
 ```
@@ -144,7 +144,7 @@ Kritik olan Z'nin ilk olması (takım geri çekilsin); X ile Y arasındaki sıra
 güvenlik açısından fark etmiyor. **LinuxCNC INI'ye uyar, dokümana değil** — bu iki
 kaynak çelişirse INI kazanır.
 `HOME_SEARCH_VEL`'i ilk denemede 1 mm/s'ye düşür. `HOME_IGNORE_LIMITS = YES` olduğu
-için switch bulunamazsa **durduracak hiçbir şey yok** (`ini-homing.adoc:46`).
+için switch bulunamazsa **durduracak hiçbir şey yok** (`ini-homing.adoc:46`). Sonra Faz 7–9: soft limit kanıtı, havada kuru koşu, kalıcılaştırma (`PLAN-BUGUN.md`).
 
 ---
 
@@ -164,20 +164,24 @@ Tam liste: [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md)
 | # | Soru | Durum |
 |---|---|---|
 | B1 | Mermer makinesinde Y'de kaç motor | 🟡 amber — B2 çözüldüğü için artık mimari değiştirmiyor |
-| B2 | Encoder pinleri GPIO olur mu | ✅ **EVET** — 14 giriş kullanılabilir |
+| B2 | Encoder pinleri GPIO olur mu | ✅ **EVET** (FPGA tarafı) — 5 izole + 9 encoder klemensi = 14 giriş; encoder klemenslerinin ön ucu ohmmetreyle doğrulanmadı |
 | B3 | AXIS blokları diferansiyel mi | ✅ Hayır, tek uçlu `GND/STEP/DIR/5V` |
 | B4 | Sürücü sinyal gerilimi | ✅ Test tezgahı: TB6560, optokuplörlü 5V. Mermer makinesi açık |
 | B5 | Saat frekansı doğru mu | 🟢 100 MHz, IDROM'dan okunuyor, blocker değil |
 | B6 | Girişler 24V kabul ediyor mu | 🟡 Açık — test tezgahında 5V ile çalışıyor |
 | B7 | İkinci izole 24V kaynak | 🔴 Mermer makinesi için gerekli, alınmadı |
-| — | **Y DIR kablosu** | 🔴 **Aktif arıza** |
+| — | **Y DIR hattı** (yeri ölçülmedi) | 🔴 **Aktif arıza** |
 
 ---
 
-## Mermer makinesi (Faz 2, beklemede)
+## Mermer makinesi (beklemede — önce test tezgahı bitecek, aşağıdaki 2026-10-18 notu)
 
 Arkadaşı envanteri dolduruyor (`docs/01-machine-survey.md`).
 En kritik satır: **Y ekseninde kaç motor.** B2 çözüldüğü için artık yeniden tasarım
 gerektirmiyor ama INI'yi belirliyor.
 
 İkinci izole 24V kaynak alınmalı — su pompası (OUT1) ve VFD 0-10V onsuz çalışmaz.
+
+**Karar (2026-10-18):** mermer makineleri **Zhulong kartında kalıyor.** Önce test
+tezgahı `PLAN-BUGUN.md`'deki Faz 1–9'un hepsiyle eksiksiz bitirilecek, mermere
+ondan sonra geçilecek.

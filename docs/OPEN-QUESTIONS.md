@@ -4,7 +4,10 @@ Bu dosya, cevaplanmadan ilerlenemeyecek soruların kaydıdır. Her soru
 cevaplandığında **buraya cevabı ve tarihi yazılır** — silinmez, üstü çizilir.
 Karar geçmişini burada tutuyoruz.
 
-Son güncelleme: 2026-08-05
+Son güncelleme: 2026-10-18 (doküman temizliği + mermer makinelerinin Zhulong'da kalması kararı, bkz. B7; cevaplar 2026-08-03 ve 2026-08-05'ten)
+
+> **Not (2026-10-18):** Bu dosyadaki "Faz N" numaraları projenin ilk (mermer) planındaki
+> fazlardır — `PLAN-BUGUN.md`'deki test tezgahı Faz 1–9 ile karıştırma.
 
 ---
 
@@ -12,14 +15,14 @@ Son güncelleme: 2026-08-05
 
 **Durum:** AÇIK — 2026-08-05'te 🔴'dan 🟡'ya düşürüldü (B2 kapandı, giriş kısıtı yok)  
 **Kim cevaplar:** Oğuzhan, panoyu açıp sayarak  
-**Neyi bloke ediyor:** Faz 5 (ilk config), Faz 6 (kablolama), Faz 7 (güvenlik zinciri)
+**Neyi bloke ediyor:** mermer projesi Faz 5 (ilk config), Faz 6 (kablolama), Faz 7 (güvenlik zinciri), `PLAN-BUGUN.md`'deki test tezgahı fazları değil
 
 Bu tek sayı giriş bütçesini belirliyor:
 
 | | Home | E-stop | Takım sensörü | Toplam | Kartta var |
 |---|---:|---:|---:|---:|---:|
-| Tek motorlu Y | 3 | 1 | 1 | **5** | 5 ✅ sınırda |
-| Çift motorlu Y (portal) | 4 | 1 | 1 | **6** | 5 ❌ **sığmıyor** |
+| Tek motorlu Y | 3 | 1 | 1 | **5** | ~~5 ✅ sınırda~~ → 14 (2026-08-05, B2; 9'u encoder klemensinde, ön uç doğrulanmadı) |
+| Çift motorlu Y (portal) | 4 | 1 | 1 | **6** | ~~5 ❌ **sığmıyor**~~ → 14 (2026-08-05, B2; 9'u encoder klemensinde, ön uç doğrulanmadı) |
 
 **Çift Y çıkarsa ne değişir:**
 
@@ -30,12 +33,16 @@ Bu tek sayı giriş bütçesini belirliyor:
   ([ini-homing.adoc:262-267](../reference/linuxcnc/docs/src/config/ini-homing.adoc#L262-L267),
   [code-notes.adoc:1411](../reference/linuxcnc/docs/src/code/code-notes.adoc#L1411)).
 - Zhulong step tarafı da sorun değil: 6 AXIS konnektörü var, 4 lazım.
-- **Tek sıkışan yer izole girişler.** Kartta 5 tane, DB25/P1 konnektörü yok
+- **~~Tek sıkışan yer~~ izole girişler.** Kartta 5 tane, DB25/P1 konnektörü yok
   (bkz. [04-zhulong-board-hardware.md](04-zhulong-board-hardware.md)),
-  genişleme yalnızca Smart Serial üzerinden.
+  ~~genişleme yalnızca Smart Serial üzerinden.~~
+  → *(2026-10-18 notu)* B2 2026-08-05'te kapandı: `num_encoders=0` ile IO 25–33
+  (encoder klemensleri) de GPIO; klemenslerin ön uç devresi ohmmetreyle henüz doğrulanmadı.
 
-**⚠ Dikkat:** Tek Y çıksa bile 5/5 doluyuz. Kapı switch'i, probe, spindle arıza
-girişi, su debi sensörü için **sıfır boşluk.** B2 her hâlükârda cevaplanmalı.
+~~**⚠ Dikkat:** Tek Y çıksa bile 5/5 doluyuz. Kapı switch'i, probe, spindle arıza
+girişi, su debi sensörü için **sıfır boşluk.** B2 her hâlükârda cevaplanmalı.~~
+→ *(2026-10-18 notu)* B2 2026-08-05'te kapandı: 5 izole + IO 25–33'te 9 GPIO = 14 giriş;
+encoder klemenslerinin ön ucu ohmmetreyle henüz doğrulanmadı. Aşağıdaki GÜNCELLEME'ye bak.
 
 ---
 
@@ -260,7 +267,7 @@ tasarlandığına işaret ediyor ama **INFERRED**, doğrulanmadı.
 
 ## 🔴 B7 — İkinci, izole 24V güç kaynağı
 
-**Durum:** AÇIK — **yeni**  
+**Durum:** AÇIK — 2026-10-18 kararı: mermer makineleri Zhulong kartında kalıyor, yani B7 hâlâ gerekli.  
 **Kim cevaplar:** Satın alma  
 **Neyi bloke ediyor:** Faz 8 (spindle + su kilitlemesi). Test tezgahında gerekmiyor.
 
@@ -294,6 +301,7 @@ Detay: [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md).
 
 | # | Soru | Cevap | Tarih |
 |---|---|---|---|
+| B2 | Encoder pinleri GPIO olur mu? | Evet: `num_encoders=0` ile IO 25-33 GPIO (FPGA tarafı); klemens ön ucu ohmmetreyle doğrulanmadı | 2026-08-05 |
 | B3 | AXIS blokları diferansiyel mi? | Hayır, tek uçlu: `GND/STEP/DIR/5V` | 2026-08-03 |
 | B4 | Sürücüler 5V mi 24V mi? | Test tezgahı: TB6560, optokuplörlü, 5V doğrudan. Mermer makinesi için hâlâ açık | 2026-08-03 |
 | — | Giriş etiketleri (20-24) global IO numarası mı? | Evet. Üretici diyagramında `PIN20`…`PIN24` | 2026-08-03 |

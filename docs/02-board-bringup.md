@@ -1,7 +1,31 @@
 # 02 — Board Bring-Up Runbook
 
 Field procedure for first power-on and identification of the **Zhulong V2.0**
-(Mesa 7i96 clone, Spartan-6 XC6SLX9, Micrel KSZ8851 PHY).
+(believed at the time to be a Mesa 7i96 clone — see the status note below; Spartan-6
+XC6SLX9, Micrel KSZ8851 PHY).
+
+> **⚠ Status, 2026-10-18 — identification is done (Step 7 is not); the procedure is kept as history.**
+> It was written before the board answered. The board turned out to be a **Mesa 7i92
+> derivative**, not a 7i96 clone: `hm2_7i92.0`, 2 × 17 = 34 IO, ClockLow 100 MHz. It
+> loads on hm2_eth's own `7I92` branch (`hm2_eth.c:1183`, a 4-character compare — neither
+> the 7i96 exact-match of Step 5.1 nor the fallback; the Step 6 tree predates that branch
+> and would file it under B) — Outcome A in substance, per
+> [10-7i92-pinout-verified.md](10-7i92-pinout-verified.md) — and the INI says
+> `BOARD = 7i92`. The dump was taken by hand with `mesaflash --device 7i92`;
+> `--device 7i96` fails with "no 7I96 board found"
+> (`board-dumps/readhmid-10.10.10.10-2026-08-05.txt`:1-6). The pin map is now
+> [10-7i92-pinout-verified.md](10-7i92-pinout-verified.md), not 03. The host is an amd64
+> laptop on a LinuxCNC 2.9.10 live USB, not a Pi — read "the Pi" below as the controller
+> host ([05-pi-setup.md](05-pi-setup.md)). The test-rig config has since been run and all
+> three axes jog — Y only one way: its direction does not change (open DIR fault, location
+> not yet measured, [DURUM.md](DURUM.md)).
+>
+> The 50 MHz crystal worry behind Step 7 was a red herring: the crystal is the PLL
+> reference, not evidence about the logic clock (docs/10). Step 7 (scope check of step
+> timing) has not been done; it is still sound advice, now low priority
+> ([OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B5). If you run it, read `hm2_7i96.0` in its
+> `setp` commands as `hm2_7i92.0`. Everything else, including the 7i96 decision tree in
+> Steps 5–6, stays as written.
 
 **Goal of this session:** get the board to answer `mesaflash --readhmid`, and
 determine which of three outcomes we are in. Nothing else. No motors, no LinuxCNC,
@@ -14,7 +38,8 @@ Pin map is [03-7i96-pinout.md](03-7i96-pinout.md).
 
 ## ⚠ On the limits of this document
 
-We have **no vendor documentation for the Zhulong V2.0**. Everything in this runbook
+We have **no vendor documentation for the Zhulong V2.0** (2026-10-18: a vendor board
+diagram has since arrived — [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md)). Everything in this runbook
 falls into one of two categories, and they are labelled throughout:
 
 - **Verified from source** — cited with file and line from `reference/linuxcnc/`.
@@ -145,6 +170,9 @@ The board's own address determines what the Pi needs. Two documented possibiliti
 **The Zhulong's factory address is UNCONFIRMED.** `scripts/detect-board.sh` tries four
 candidates for exactly this reason. If none work, the address is something else and you
 will need to find it — see the fallback note in 2.4.
+
+(2026-10-18: the board answers on `10.10.10.10`, with the PC on `10.10.10.1/24`
+([DURUM.md](DURUM.md)). Whether that is its factory default is not recorded.)
 
 The man page warns specifically about `192.168.1.0/24`:
 
@@ -293,7 +321,9 @@ case and trailing spaces are significant. Full decoding table in Step 5.2.
 
 **Why it matters:** the pivotal question, because the missing P1 means 17 stock pins go
 nowhere and the vendor may have declared fewer ports. Our committed I/O comes to 36 pins
-(arithmetic in 04), which fits in 51 but *not* in 34.
+(arithmetic in 04), which fits in 51 but *not* in 34. (2026-10-18: superseded — the IDROM reports
+2 × 17 = 34, and the real pin allocation fits — see the GPIO budget in
+[10-7i92-pinout-verified.md](10-7i92-pinout-verified.md).)
 
 - `3 / 17 / 51` **and** name is `7I96` → Outcome A.
 - Anything else **and** name is `7I96` → **Outcome C, hard abort.**
@@ -841,12 +871,13 @@ Board powered, **drives disconnected**, nothing able to move.
 
    100 µs is chosen so it is far below the `0x3FFF` clamp at either candidate clock —
    16383 counts is 491 µs at 33.33 MHz and 328 µs at 50 MHz — while being trivially
-   measurable.
+   measurable. (2026-10-18: at our 100 MHz the clamp is 163.8 µs, so 100 µs still fits —
+   [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B5.)
 
-3. Put a scope or logic analyser on the **STEP** terminal of `AXIS 0`. Which terminal
-   that is remains open —
-   see [04-zhulong-board-hardware.md](04-zhulong-board-hardware.md) Q1. If the block
-   turns out to be differential, measure across the pair, not to ground.
+3. Put a scope or logic analyser on the **STEP** terminal of `AXIS 0`, measured to that
+   block's `GND`. The blocks are single-ended `GND STEP DIR 5V` (B3 closed,
+   [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md)); `AXIS 0` STEP is IO 4 =
+   `stepgen.00` ([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)).
 
 4. **Measure the high-time of one pulse.** Compare against the 100 000 ns you asked for.
 
@@ -869,6 +900,10 @@ Suppose the IDROM declares **33.33 MHz** but the FPGA logic actually runs at **5
 plausible for us, since the Zhulong carries a **50.000 MHz crystal** (OBSERVED,
 [04-zhulong-board-hardware.md](04-zhulong-board-hardware.md)) while the stock 7i96 IDROM
 declares 33 MHz / 200 MHz.
+
+(2026-10-18: hypothetical for us. Our board declares 100 MHz (`readhmid:17`), and the
+crystal was never evidence about the logic clock —
+[10-7i92-pinout-verified.md](10-7i92-pinout-verified.md).)
 
 You configure a drive that needs a 2 µs minimum step pulse, so you set `steplen = 2000`.
 
@@ -921,6 +956,10 @@ analyser costs less than one marble slab. But if you truly cannot get one:
    declared by the stock board is not proof of anything — the FPGA may well synthesise
    33.33 MHz from a 50 MHz reference via a PLL, which is completely normal — but it means
    the question is live and unanswered.
+   (Resolved at IDROM level, 2026-08-05: ClockLow 100 MHz, ClockHigh 200 MHz —
+   `readhmid:17-18`. The 50 MHz crystal is the PLL reference, not evidence of a
+   misdeclared clock — [10-7i92-pinout-verified.md](10-7i92-pinout-verified.md). The scope
+   check is still pending, low priority — [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B5.)
 
 3. **Set `steplen` and friends generously.** If your drive needs 2 µs, ask for 5 µs. A
    66 % error on 5 µs still delivers 3.3 µs, which clears the requirement. You pay in

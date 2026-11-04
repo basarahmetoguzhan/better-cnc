@@ -348,6 +348,14 @@ def render_dro(c: Dict[str, Any]) -> str:
     rows = []
     for a in c["axes"]:
         travel_cls = "ok" if a["travel_measured"] else "unmeasured"
+        # homed is None while LinuxCNC's status is unknown
+        # (viewmodel.control_screen): "ref yok" would claim a reading.
+        if a["homed"] is None:
+            hc, hs = MUTED, "—"
+        elif a["homed"]:
+            hc, hs = OK, "ref"
+        else:
+            hc, hs = WARN, "ref yok"
         rows.append(
             '<div class="dro-row" data-axis="{ax}">'
             '<span class="dro-ax">{ax}</span>'
@@ -362,8 +370,8 @@ def render_dro(c: Dict[str, Any]) -> str:
                 tc=travel_cls,
                 tm="1" if a["travel_measured"] else "0",
                 travel=e(a["travel"]),
-                hc=OK if a["homed"] else WARN,
-                hs="ref" if a["homed"] else "ref yok",
+                hc=hc,
+                hs=hs,
             )
         )
     head = (
@@ -387,7 +395,7 @@ def render_jog(c: Dict[str, Any]) -> str:
             label,
             "jog",
             c["can_jog"],
-            "" if c["can_jog"] else "Makine devre dışı",
+            "" if c["can_jog"] else c["jog_disabled_reason"],
             kind="jog",
             value="{}:{}".format(axis, direction),
         )
@@ -423,7 +431,9 @@ def render_jog(c: Dict[str, Any]) -> str:
         )
     )
     if not c["can_jog"]:
-        body = banner("Jog devre dışı — makine kapalı.", "warn") + body
+        # The reason comes from the view model, which says "bilinmiyor" when the
+        # status could not be read - "makine kapalı" would be read off a placeholder.
+        body = banner(c["jog_disabled_reason"], "warn") + body
     return card("Jog", body)
 
 
@@ -778,6 +788,32 @@ def render_body(vm: Dict[str, Any]) -> str:
     )
 
 
+def _script_json(value: Any) -> str:
+    """json.dumps for a value pasted inside <script>...</script>.
+
+    json.dumps leaves "<", ">" and "&" as they are, so a string holding
+    "</script>" would end the element early and turn the rest into live
+    markup, and "<!--" changes where the parser looks for the end (HTML
+    Standard, 4.12.1.3 "Restrictions for contents of script elements"). Each
+    is written as its \\u escape instead: the same string to JavaScript, and
+    JSON outside a string never contains them. U+2028/U+2029 are line
+    terminators that ECMAScript before ES2019 rejects inside a string literal
+    (the "JSON superset" change), so they are escaped as well. Other non-ASCII
+    text (Turkish) stays as UTF-8, which the page declares (meta charset).
+
+    Defence in depth: the only value inlined today is the screen name, which
+    app.py already restricts to VM.SCREENS on every route and on --dump.
+    """
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 def render_page(vm: Dict[str, Any], css: str, js: str) -> str:
     return (
         "<!doctype html>\n"
@@ -791,7 +827,7 @@ def render_page(vm: Dict[str, Any], css: str, js: str) -> str:
             title=e(vm["profile"]["label"]),
             css=css,
             body=render_body(vm),
-            vmjson=json.dumps({"screen": vm["screen"]}),
+            vmjson=_script_json({"screen": vm["screen"]}),
             js=js,
         )
     )

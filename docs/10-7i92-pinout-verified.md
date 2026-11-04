@@ -241,10 +241,11 @@ machine's input-budget problem — see [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B2
 
 **The caveat that keeps B2 from being fully closed:** FPGA-level availability says nothing
 about the *external circuitry* between the FPGA pin and the screw terminal. IO 20–24 are
-behind opto-isolators designed for 24 V (docs/04). IO 25–33 come out at the encoder
-terminals, whose analog front-end is **unverified** — they may be 5 V-only, may be
-input-only, may carry a bias network we cannot defeat. Ring them out with a meter before
-planning to use them as general inputs.
+behind opto-isolators that docs/04 *infers* were designed for 24 V. That is not verified:
+B6 is open, and on the test rig they work at 5 V ([DURUM.md:171](DURUM.md)).
+IO 25–33 come out at the encoder terminals, whose analog front-end is **unverified** —
+they may be 5 V-only, may be input-only, may carry a bias network we cannot defeat. Ring
+them out with a meter before planning to use them as general inputs.
 
 ---
 
@@ -266,8 +267,15 @@ the wiring beyond the connector.
 
 | Open | Why the dumps cannot answer it |
 |---|---|
-| Which physical end of which axis each sensor sits at | Requires halmeter and pushing switches by hand |
-| Switch polarity (`.in` vs `.in_not`) | Opto-isolator inversion is a property of the input circuit |
+| Which end of **Y** is the + end (`gpio.022` rear / `gpio.023` front) | Y does not change direction — Y+ and Y− move the same way (open DIR fault, location not yet measured; [DURUM.md:12](DURUM.md), [PLAN-BUGUN.md](PLAN-BUGUN.md) phase 1) |
 | Encoder terminal front-end characteristics | Requires an ohmmeter on an unpowered board |
-| Whether AXIS *n*'s terminals really route to StepGen *n*'s pins | Requires commanding one stepgen at a time, motors uncoupled |
+| Whether AXIS 3–5 route to StepGen 3–5, and whether the AXIS 1 `DIR` terminal is really driven by IO 7 | AXIS 3–5: requires commanding one stepgen at a time, with the test motor not coupled to any mechanics. AXIS 1 `DIR`: Y does not change direction — open fault, location (board terminal, cable or driver) not yet measured ([PLAN-BUGUN.md](PLAN-BUGUN.md) phase 1) |
 | Actual axis travel | Requires a rule |
+
+**Since verified on the rig** ([DURUM.md:69-82](DURUM.md); noted here 2026-10-18):
+switch positions, each switch triggered by hand — `gpio.020` X right (= X max, since X+ is
+right), `gpio.021` X left, `gpio.022` Y rear, `gpio.023` Y front, `gpio.024` Z top, no
+Z-bottom switch; polarity — idle `.in = TRUE`, pressed FALSE → use `.in_not` for the rig's switches (not board-universal: an NC series chain, as planned for the marble machine, reads the other way). By jogging:
+AXIS 0 and AXIS 2 drive X and Z in both directions (`stepgen.00` / `stepgen.02`), and
+AXIS 1 STEP drives Y (`stepgen.01`), but Y's direction does not change. The switch nets are
+not yet connected in HAL.

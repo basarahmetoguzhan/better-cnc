@@ -56,8 +56,8 @@ kaydet.
 
 Switch'ler sadece homing sırasında okunuyor, çalışma sırasında değil. Yani
 jog ya da program sırasında eksen sonuna dayanırsa hiçbir şey durdurmuyor.
-LinuxCNC'de bunu düzelteceğiz — yumuşak limitler bedava, `$21`'in karşılığı da
-`MIN_LIMIT_SWITCH` / `MAX_LIMIT_SWITCH` bağlantılarıyla kurulabilir.
+LinuxCNC'de bunu düzelteceğiz — yumuşak limitler bedava, `$21`'in karşılığı da switch'leri HAL'de
+`joint.N.neg-lim-sw-in` / `joint.N.pos-lim-sw-in` pinlerine bağlayarak kurulabilir ([06](06-grbl-to-linuxcnc.md) "Conceptual differences" §2; henüz bağlı değil — [PLAN-BUGUN.md](PLAN-BUGUN.md) Faz 5).
 
 ---
 
@@ -105,6 +105,10 @@ ama **eşit değil** (833.3 / 823.5, %1.2 fark). Nominal olarak aynı mekaniğe
 sahip iki eksen ancak ölçülerek ayrı ayrı ayarlanmışsa böyle çıkar. Yine de
 LinuxCNC'ye geçtikten sonra komparatörle doğrulanacak.
 
+> **2026-10-18:** "GÜVENİLİR" GRBL + eski sürücü için geçerliydi. Sürücüler artık TB6560 ve
+> mikro adım aynı olmayabilir (T5) — bu kurulumda `SCALE` henüz doğrulanmadı
+> ([PLAN-BUGUN.md](PLAN-BUGUN.md) Faz 3, [DURUM.md:88](DURUM.md)).
+
 `$3 = 0` → yön ters çevirme yok → `SCALE` işaretleri pozitif kalır.
 
 ### Hız ve ivme — GÜVENİLMEZ, sadece başlangıç değeri
@@ -127,7 +131,7 @@ HOME_LATCH_VEL  = 0.417     # $24 = 25 mm/dk ÷ 60
 
 `$23 = 0` → üç eksen de **pozitif** yönde home ediyor. Bu sıra dışı — çoğu
 makinede Z pozitif (yukarı) ama X/Y negatif yönde home eder. Fiziksel olarak
-doğrulanmalı: switch'ler hangi uçta?
+doğrulanmalı: switch'ler hangi uçta? (2026-10-18: X ve Z için elle doğrulandı, Y'nin + ucu açık — aşağıda T2)
 
 `$27 = 1.000` mm pull-off → LinuxCNC'de `HOME_OFFSET` mantığıyla karşılanır.
 
@@ -138,13 +142,18 @@ doğrulanmalı: switch'ler hangi uçta?
 STEPLEN   = 10000    # $0 = 10 µs × 1000
 ```
 
-`$0 = 10 µs` de fabrika varsayılanı, sürücüye göre ayarlanmamış. A4988 minimum
-1 µs, DRV8825 minimum 1.9 µs ister — yani 5-10 kat fazla, güvenli ama savurgan.
+`$0 = 10 µs` de fabrika varsayılanı, sürücüye göre ayarlanmamış. (Bu satır sürücü modeli
+bilinmeden yazılmıştı: A4988 minimum 1 µs, DRV8825 minimum 1.9 µs ister diye 5-10 kat fazla,
+güvenli ama savurgan sayılmıştı.) **2026-10-18:** test tezgahının sürücüleri **TB6560**; LinuxCNC
+başlangıç değerleri (`STEPLEN` yine 10 µs) ve gerekçesi [09-tb6560-drivers.md](09-tb6560-drivers.md)'de
+— INFERRED, ölçülmedi.
 
-**İleriye dönük önemli:** `steplen + stepspace = 20 µs` maksimum 50 kHz step
-hızı demek. Z'de 1250 steps/mm ile bu **40 mm/sn = 2400 mm/dk** tavanı koyuyor.
-Şu anki 500 mm/dk'da sorun değil ama makineyi hızlandırmak istersek ilk
-darboğaz burası olur. `steplen`'i 2-3 µs'ye indirmek tavanı 4 katına çıkarır.
+**İleriye dönük önemli** (2026-10-18'de TB6560'a göre düzeltildi): `steplen + stepspace = 20 µs`
+teorik 50 kHz step hızı demek (Z'de 1250 steps/mm ile 2400 mm/dk). Ama ilk darboğaz bu değil:
+TB6560'ın STEP optokuplörü üretici rakamıyla **15 kHz** ile sınırlı; %20 payla mevcut ölçekte
+Z ~576, X ~864 mm/dk ([09-tb6560-drivers.md](09-tb6560-drivers.md), [DURUM.md:99](DURUM.md)).
+Hız için kaldıraç `steplen` değil, mikro adımı düşürmek. 15 kHz rakamı bağımsız doğrulanmadı
+(docs/09 T7).
 
 ---
 
@@ -156,12 +165,12 @@ enerjisini kesiyor. Yani motorlar zamanın çoğunda **enerjisiz** duruyor.
 LinuxCNC varsayılan olarak böyle çalışmaz — motorlar sürekli enerjili kalır.
 Sonuç:
 
-- Motorlar ve A4988/DRV8825 modülleri **belirgin şekilde daha çok ısınacak**
-- Sürücülerin akım limiti potansiyometreleri bu görev döngüsü varsayılarak
-  ayarlanmış olabilir. Sürekli enerjide termal koruma devreye girip
+- Motorlar ve TB6560 sürücü kartları **belirgin şekilde daha çok ısınacak**
+- TB6560'ta akım DIP switch'le kademeli seçiliyor ([09-tb6560-drivers.md](09-tb6560-drivers.md)
+  "Akım ayarı"). Kademe yüksek seçildiyse sürekli enerjide termal koruma devreye girip
   sürücü kendini kapatabilir — bu adım kaybı olarak görünür
-- İlk uzun testte modüllerin sıcaklığını elle kontrol et. Dokunulamayacak
-  kadar sıcaksa akım limitini düşür ya da fan ekle
+- İlk uzun testte sürücü kartlarının ve motorların sıcaklığını elle kontrol et. Dokunulamayacak
+  kadar sıcaksa akım kademesini düşür ya da fan ekle
 
 Bu, ayrıca mermer makinesinde de sorulacak bir soru: eski kontrolcü motorları
 duruşta enerjisiz bırakıyor muydu?
@@ -173,10 +182,10 @@ duruşta enerjisiz bırakıyor muydu?
 | # | Soru | Nasıl cevaplanır |
 |---|---|---|
 | T1 | Gerçek strok ne kadar? | Her ekseni uçtan uca sür, ölç. `$130-132` fabrika değeri, güvenilmez |
-| T2 | Switch'ler hangi uçta? | `$23 = 0` üç eksenin de pozitif yönde home ettiğini söylüyor, fiziksel doğrulama gerek |
-| T3 | Kaç switch var, nasıl bağlı? | Shield'in limit header'larına bak. `$5 = 0` → NO switch, GND'ye kapanıyor |
-| T4 | Sürücü modeli? | Modül üstündeki çipte yazıyor. `steplen`'i düşürebilmek için gerekli |
-| T5 | Mikro adım jumper konumu? | Shield'de jumper'lara bak. `$100-102` bu konuma bağlı — modül sökülürse bozulur |
+| T2 🟡 | Switch'ler hangi uçta? | **Kısmen kapandı** — elle doğrulandı ([DURUM.md:69-82](DURUM.md)): `gpio.020` X sağ (X+ = sağ → maksimum uç), `gpio.021` X sol, `gpio.024` Z üst, Z altta switch yok. `gpio.022` Y arka / `gpio.023` Y ön; hangisinin + uç olduğu Y DIR arızası çözülünce belli olacak. Home yönleri INI'de hâlâ `ASSUMPTION` (GRBL'de `$23 = 0`: üç eksen + yönde home ediyordu — yukarıdaki Homing notu) |
+| T3 ✅ | Kaç switch var, nasıl bağlı? | **Kapandı** — 5 switch, Zhulong IO 20–24'e bağlı. Boşta `.in = TRUE`, basınca FALSE → HAL'de `.in_not` kullanılacak ([DURUM.md:71](DURUM.md)). Bu ve `$5 = 0` NO switch olduğunu destekliyor, kanıtlamıyor |
+| T4 ✅ | Sürücü modeli? | **TB6560** (tezgahta şu an çalışan sürücüler; shield'in eski modülleri kayıtlı değil) — kapandı ([09-tb6560-drivers.md](09-tb6560-drivers.md)) |
+| T5 | Mikro adım jumper konumu? | Sürücüler artık TB6560 ([09](09-tb6560-drivers.md)). `$100-102` eski sürücünün ayarına göre kalibre edildi; TB6560'ın mikro adımı aynı değilse ölçek bozulur. Doğrulama: [PLAN-BUGUN.md](PLAN-BUGUN.md) Faz 3 (ölçek ölçümü). Bkz. docs/09 T5 |
 | T6 | Motorlar sürekli enerjide ne kadar ısınıyor? | İlk uzun testte elle kontrol |
 
 ---

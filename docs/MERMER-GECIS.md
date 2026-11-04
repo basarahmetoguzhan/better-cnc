@@ -93,7 +93,7 @@ Test tezgahının hiçbir sayısı taşınmaz. Mermer makinesi için:
 
 ## 4. Giriş bütçesi
 
-Test tezgahı 5 girişin 5'ini kullanıyor (`gpio.020`–`024`), e-stop için yer yok.
+Test tezgahı 5 izole girişin 5'ini kullanıyor (`gpio.020`–`024`), e-stop için izole giriş kalmadı. Test tezgahının config string'inde de `num_encoders=0` var (yukarıda), yani IO 25–33 orada da GPIO ve 6. giriş mümkün — ama encoder klemenslerinin arkasındaki devre ölçülmedi, 24V cihaz bağlamadan önce ohmmetreyle kontrol (aşağıdaki ⚠ notu). Asıl çözüm yine e-stop'u sürücü gücü zincirine bağlamak (§5).
 
 Mermer makinesinde **`num_encoders=0` sayesinde IO 25–33 de GPIO** — toplam 14 giriş
 fiziksel klemenste. Tek Y senaryosunda:
@@ -174,13 +174,13 @@ Mermer makinesine geçerken:
 
 ## 8. Test tezgahından taşınacak kanıtlanmış bilgi
 
-Bunlar makineden bağımsız, doğrudan geçerli:
+Bunlar makineden bağımsız, doğrudan geçerli (giriş polaritesi hariç — aşağıdaki not):
 
 - Kart `7I92` olarak tanıtıyor, HAL öneki `hm2_7i92.0`
 - 34 IO, 2 port × 17, ClockLow 100 MHz
 - `AXIS n` konnektörü → `stepgen.0n`
 - Üretici serigrafisindeki pin numaraları = global IO numarası
 - IO 17–24 kalıcı saf GPIO, hiçbir modül alamaz
-- Girişler idle'da HIGH, tetiklenince LOW → HAL'de `.in_not`
+- Test tezgahında girişler switch'e basılmamışken HIGH okuyor — ama polarite makineden bağımsız değil, switch tipine bağlı: test tezgahının switch'leri NO gibi davranıyor (GRBL `$5 = 0` bunu destekliyor, kanıtlamıyor), tetiklenince LOW → `.in_not`. Mermerde planlanan NC seri zincirde (`docs/01`) okuma ters beklenir, endüktif sensörde (NPN/PNP) farklı olabilir; devreye almada her giriş elle tetiklenerek yeniden doğrulanacak
 - `sserial_port_0=xxxxxxxx` doğru devre dışı bırakma biçimi
 - İki 24V klemensi aynı etiketli, ana besleme buck çeviricinin yanındaki

@@ -1,13 +1,19 @@
 # 06 — GRBL → LinuxCNC Settings Translation
 
-Reference for **Phase 1.5**: proving the Pi + Zhulong control chain on the small
-Arduino/CNC-shield router before touching the marble machine. We replace the Arduino,
-keep the shield and its stepper drivers.
+Reference for **Phase 1.5**: proving the controller + Zhulong chain on the small test
+router before touching the marble machine. The original plan was a Pi, replacing the
+Arduino and keeping the CNC shield's drivers. What actually runs is an amd64 laptop on a
+LinuxCNC 2.9.10 live USB ([05-pi-setup.md](05-pi-setup.md)) driving TB6560 drivers from the
+Zhulong's AXIS blocks ([09-tb6560-drivers.md](09-tb6560-drivers.md)).
 
-The point of Phase 1.5 is that when we get to the marble machine, **its only unknown is
-its own mechanics** — the controller chain will already be proven end to end.
+The point of Phase 1.5 is that when we get to the marble machine, **its main unknown is
+its own mechanics** — the controller chain will already be proven end to end (step timing
+only for the TB6560; the marble machine's drives are still B4).
 
-**Status: DERIVED.** Nothing here has been run against the test machine.
+**Status: DERIVED, partly exercised** (as of 2026-10-18; rig results from 2026-08-05). The test-rig config built from this
+translation ([configs/test-rig/](../configs/test-rig/)) loads, enables and jogs all three
+axes ([DURUM.md](DURUM.md)); Y only moves one way, because of an open DIR fault.
+`SCALE` has not been verified yet, travel has not been measured, and soft limits and homing have not been tried.
 
 ---
 
@@ -256,8 +262,9 @@ Nothing in a `$$` dump determines these. The converter emits them as TODO.
 | `[TRAJ]MAX_LINEAR_VELOCITY` | GRBL has no machine-wide velocity ceiling distinct from per-axis. | [ini-config.adoc:859](../reference/linuxcnc/docs/src/config/ini-config.adoc#L859) |
 
 **`STEPSPACE`/`DIRSETUP`/`DIRHOLD` are the ones to take seriously.** They protect the
-driver. Get them from the driver datasheet once the shield is photographed — that is a
-listed unknown for this machine.
+driver. The test rig's drivers are **TB6560**. Starting values are in
+[09-tb6560-drivers.md](09-tb6560-drivers.md) — still INFERRED, not scope-measured; the
+15 kHz STEP ceiling there is the manufacturer's figure, not independently verified.
 
 ### ⚠️ A naming trap in the stepgen variables
 
@@ -377,7 +384,10 @@ net homeswitches => joint.1.home-sw-in
 net homeswitches => joint.2.home-sw-in
 ```
 
-Substitute a Zhulong `gpio.NNN.in` for the parport pin and this is our config. And note
+Substitute a Zhulong `gpio.NNN` input for the parport pin to get the shared-pin form. Our
+test rig does not share one pin: each switch has its own input (IO 20–24), and idle `.in`
+reads TRUE (pressed FALSE), so its nets will use `.in_not` ([DURUM.md](DURUM.md);
+[PLAN-BUGUN.md](PLAN-BUGUN.md) phase 5). Those nets are not connected yet. And note
 that when switches are shared, `HOME_SEQUENCE`
 ([ini-homing.adoc:248-267](../reference/linuxcnc/docs/src/config/ini-homing.adoc#L248-L267))
 stops being optional — joints must home one at a time.
@@ -390,9 +400,10 @@ and the docs confirm *"Both full GPIO pins and I/O pins used as inputs by active
 instances have this pin"*
 ([hostmot2.adoc:420-426](../reference/linuxcnc/docs/src/drivers/hostmot2.adoc#L420-L426)).
 
-**Read `$21` and `$22` before assuming anything.** The test machine has switches
-physically present, but if `$21=0` and `$22=0` they were never wired up or never worked.
-That is a fact about the machine we do not yet have.
+**`$21` and `$22` have since been read** ([07-test-machine-grbl-analysis.md](07-test-machine-grbl-analysis.md)
+§3): `$21 = 0`, `$22 = 1`. At the time of the dump, GRBL was set to read the switches for
+homing only, not as hard limits. On the Zhulong all five are wired to IO 20–24 and mapped
+by hand ([DURUM.md](DURUM.md)); their HAL nets are not connected yet.
 
 ### 3. Steps are generated in different places, which makes some GRBL settings meaningless.
 
@@ -544,8 +555,9 @@ soft limits disabled drives it into its own frame.
 ## Phase 1.5 workflow
 
 1. **`$I` and `$$`, saved raw** into `docs/board-dumps/`. Confirm GRBL 1.1.
-2. **Photograph the shield** — the stepper driver identity is an open unknown, and
-   `STEPSPACE`/`DIRSETUP`/`DIRHOLD` come from its datasheet, not from GRBL.
+2. **Photograph the shield** — superseded: the rig now runs **TB6560** drivers
+   ([09-tb6560-drivers.md](09-tb6560-drivers.md)). Starting `STEPSPACE`/`DIRSETUP`/`DIRHOLD`
+   values are there — INFERRED, not scope-measured.
 3. **Run `scripts/grbl2ini.py`** to get draft fragments. **Read its warning block** — it
    lists everything a human must supply.
 4. **Fill in the TODOs**: driver timing from the datasheet, homing signs empirically,
@@ -565,7 +577,7 @@ soft limits disabled drives it into its own frame.
 
 | Date | What was confirmed | Evidence |
 |---|---|---|
-| _(pending)_ | Firmware is GRBL 1.1 | `$I` output |
-| _(pending)_ | `$21`/`$22` — were limits/homing ever enabled? | `$$` dump |
-| _(pending)_ | Stepper driver type | shield photograph |
+| 2026-08-03 | Firmware is GRBL 1.1 — from the default-value fingerprint (`$10 = 1`), not from `$I` | [07](07-test-machine-grbl-analysis.md) §1; `board-dumps/grbl-eeprom-2026-08-03.json` |
+| 2026-08-03 | `$20 = 0`, `$21 = 0` (no hard limits), `$22 = 1` (homing on) at the time of the dump | [07](07-test-machine-grbl-analysis.md) §3; same dump |
+| 2026-08-03 | Stepper drivers on the rig are TB6560 | [09-tb6560-drivers.md](09-tb6560-drivers.md) (user-confirmed, photo) |
 | _(pending)_ | Step pulse width measured vs commanded | scope |

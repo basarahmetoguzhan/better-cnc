@@ -104,8 +104,11 @@ Sonuç — seviye çevirici gerekiyor mu: ______________
 > Endüktif sensörler genelde PNP + NO gelir ama Çin makinelerinde NPN de yaygın.
 > Sensörün üstünde yazar; yoksa multimetre ile ölç.
 >
-> **Plan:** 3 home + e-stop + tool sensor = 5 giriş, dolu. Limit switch'ler
-> **seri bağlanıp** home hattına eklenir (NC seri zincir — herhangi biri açılırsa
+> **Plan:** 3 home + e-stop + tool sensor = 5 izole giriş, dolu. Ek giriş
+> gerekirse encoder klemenslerindeki IO 25–33 de GPIO olarak kullanılabilir (9 pin,
+> `num_encoders=0` — [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B2). Ama bu klemenslerin
+> arkasındaki devre doğrulanmadı: 24V sensör bağlamadan önce ohmmetreyle kontrol et.
+> Limit switch'ler **seri bağlanıp** home hattına eklenir (NC seri zincir — herhangi biri açılırsa
 > hat kopar). Bu standart LinuxCNC pratiği, home ve limit aynı pini paylaşır.
 
 ---
@@ -142,14 +145,14 @@ Sonuç — seviye çevirici gerekiyor mu: ______________
 
 > **Pazarlık konusu değil:** E-stop, sürücü/spindle gücünü **donanımsal olarak**
 > kesmeli. LinuxCNC'nin haberi olması iyidir ama yazılım güvenlik fonksiyonu
-> değildir. Pi çökse bile makine durmalı.
+> değildir. Pi/PC çökse bile makine durmalı.
 
 ---
 
 ## 8. Güç beslemesi
 
 - [ ] Panoda 24V DC besleme var mı, kaç amper: ______________
-- [ ] Boşta kalan kapasite (Zhulong kartı + Pi için): ______________
+- [ ] Boşta kalan kapasite (Zhulong kartı için; kontrolcü Pi olursa onun için de): ______________
 - [ ] 5V besleme var mı: ______________
 
 ---

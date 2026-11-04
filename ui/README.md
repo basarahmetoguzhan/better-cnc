@@ -16,18 +16,42 @@ make ui-marble       # mermer profili — neyin TODO olduğunu görmek için
 make dump SCREEN=makine > /tmp/makine.html   # sunucusuz tek ekran
 ```
 
+`--dump`'a bilinmeyen ya da boş bir ekran adı vermek (`make dump SCREEN=makina`)
+kullanım hatasıdır: komut 2 koduyla çıkar, sayfa yazmaz ve geçerli ekranları
+listeler (kontrol, program, probing, takimlar, alarmlar, makine). `make dump`'ta
+`SCREEN` verilmezse ya da boş verilirse (`SCREEN=`) `makine` kullanılır; boş ad
+hatası yalnızca doğrudan `--dump ""` için geçerli.
+
 `make` olmadan: paket kurulu değil, `ui/` import yoluna eklenmeli.
 
 ```bash
 PYTHONPATH=ui python3 -m bettercnc.app --profile test-rig --port 8080
 ```
 
-Makine bağlantısı **yok** — bu sürüm `MockAdapter`'dan render ediyor. Gerçek
-makinede tek satır değişiyor (`app.build_session`):
+Makine bağlantısı **yok** — sunucu varsayılan olarak `MockAdapter`'dan render
+ediyor. Bunu yalnızca stderr'deki başlangıç satırı söylüyor; ekranda SİMÜLASYON
+işareti yok, bağlantı sayaçları ve DRO ölçülmüş gibi görünür (açık eksik). Gerçek
+makinede `app.build_session`'daki adaptör satırı değişir; `app.serve`'deki stderr
+başlangıç satırı (`mock adapter — makineye bağlı DEĞİL`) da değiştirilmeli, yoksa
+makineye bağlıyken "bağlı DEĞİL" der ve
+`test_banner_claim_matches_the_adapter_actually_in_use` testi düşer:
 
 ```python
 adapter = LinuxCncAdapter(profile)   # MockAdapter(profile) yerine
 ```
+
+`LinuxCncAdapter` makinede **hiç çalışmadı**. LinuxCNC 2.9 kaynağından türetilmiş
+bir sahteye (`ui/tests/fake_linuxcnc.py`) karşı test ediliyor; zamanlama
+değerleri ve sınırları (0.25 s bekleme sınırı, 3 × `[EMCIO]CYCLE_TIME` estop
+sıfırlama süresi, hata kanalından okuma başına 64 mesaj; bir de sunucunun 10 s
+istek zaman aşımı) seçildi, ölçülmedi. Makinede ilk
+bakılacaklar ve açık eksiklerin listesi:
+[docs/11, "Known gaps and next steps"](../docs/11-ui-implementation.md#known-gaps-and-next-steps).
+
+Makinede bilinmesi gereken bir yan etki: bağlantı pinlerini okumak için UI pinsiz
+bir HAL bileşeni (`bettercnc-ui-<pid>`) açar. LinuxCNC kapanırken
+`halcmd unload all` bu sürece SIGTERM gönderir ve UI de kapanır; LinuxCNC'den
+sonra yeniden başlatın.
 
 ## Test
 
@@ -37,7 +61,14 @@ make test-v          # ayrıntılı
 make coverage        # satır kapsaması (stdlib, `coverage` paketi gerekmiyor)
 ```
 
-321 test, hepsi geçiyor. Kapsama **%94.1**.
+655 test (49'u `scripts/test_grbl2ini.py`), hepsi geçiyor, beklenen başarısızlık
+yok. Kapsama **%99.6**; `adapter.py` %99.0, `mdi.py` %100. `make coverage` paketteki
+modülleri dizinden bulur, yeni bir modül listeden düşemez.
+
+`reference/` (gitignore'daki LinuxCNC 2.9 klonu) varsa 18 doğruluk testi sahteyi
+ve kodun dayandığı LinuxCNC olgularını kaynakla karşılaştırır (içerikle; atıflardaki
+satır numaraları denetlenmez); yoksa bu testler atlanır,
+gerisi çalışır.
 
 ## Neden saf stdlib
 
@@ -53,20 +84,28 @@ modülü de PyPI'da olmayan, makineyle gelen bir CPython modülü. Dolayısıyla
 ## Katmanlar
 
 ```
-app.py          stdlib http.server
+app.py          stdlib http.server, --dump
 render.py       view model -> HTML          (sunucu tarafı)
 viewmodel.py    (profil, config, state) -> dict     ← testlerin çoğu burada
 adapter.py      LinuxCNC sınırı: MachineAdapter / MockAdapter / LinuxCncAdapter
-state.py        estop, homing, link health
+mdi.py          MDI kapısı — iki adaptörün ortak kuralı
+state.py        estop, homing, link health, "durum bilinmiyor"
 configmodel.py  eksen/zamanlama değerleri — INI'den
 profiles.py     test-rig ve marble tanımları
 capabilities.py yetenek kataloğu
-iniload.py      INI ayrıştırma + "ölçülmedi" tespiti
+iniload.py      INI ayrıştırma (LinuxCNC'nin okuduğu gibi) + "ölçülmedi" tespiti
 ```
 
 `configmodel.py`'nin üstünde **hiçbir donanım sayısı sabit yazılı değil** —
 hepsi `configs/*/**.ini`'ye ya da `profiles.py`'deki bir `docs/` atfına
-dayanıyor.
+dayanıyor. Açık bir istisna var: INI'si olmayan profilde (marble) adaptörler
+eklemleri X/Y/Z, HOME_SEQUENCE 0/1/2 ve HOME_SEARCH_VEL 0 olarak uyduruyor
+(docs/11, Known gaps).
+
+`iniload` INI'yi LinuxCNC'nin kendi okuyucusu gibi okur: tekrarlanan bölüm ya da
+anahtarda **ilki** geçerlidir, sondaki ters eğik çizgi satırı bir sonrakiyle
+birleştirir, değeri olmayan anahtar (`KEY =`) bulunamamış sayılır; aynı anahtarın sonraki
+satırı da okunmaz.
 
 ## Tasarımın iki kuralı
 
@@ -76,10 +115,19 @@ yeteneği beyan etmeyi unutan profil `validate_profile`'da **hata verir** —
 sessizce kaybolmaz. (`docs/MERMER-GECIS.md:43-45`)
 
 **2. Ölçülmemiş sayı gösterilmez.**
-INI'de strok değerleri var (LinuxCNC'nin bir şeye ihtiyacı var) ama
-`# ASSUMPTION:` ile işaretli. `iniload` bu işareti okuyor, UI "ölçülmedi"
-yazıyor. Strok ölçülüp yorum silindiğinde UI **kod değişikliği olmadan**
-sayıları göstermeye başlar.
+INI'de strok değerleri var (LinuxCNC'nin bir şeye ihtiyacı var) ama geçici
+olarak işaretli (`# ASSUMPTION:`, `PROVISIONAL`) — `[JOINT_n]` limitleri de,
+`[AXIS_*]` limitleri de; UI bugün yalnızca `[JOINT_n]` limitlerini okuyor.
+`iniload` bu işareti okuyor, UI "ölçülmedi" yazıyor. Strok ölçülüp işaret
+kelimeleri (`ASSUMPTION:`, `PROVISIONAL`, `MUST BE MEASURED`) silindiğinde UI
+**kod değişikliği olmadan** sayıları göstermeye başlar; `soft_limits` yeteneği,
+KORUMA YOK uyarısı ve Z alt ucu metni de INI'yi izler.
+
+Aynı kural LinuxCNC'den okunamayan durum için de geçerli: `LinuxCncAdapter`
+LinuxCNC'nin durumunu okuyamazsa başlık **DURUM BİLİNMİYOR** der, DRO ve WCS `—`
+gösterir, besleme düğmelerinden hiçbiri seçili görünmez; başlatma, jog ve MDI
+kapanır. Okunamayan bir bağlantı pini
+`—`'dir, `0` değil, ve bağlantıyı sağlıklı saydırmaz.
 
 ## Profil eklemek
 

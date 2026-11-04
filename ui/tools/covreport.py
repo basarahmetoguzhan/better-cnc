@@ -34,17 +34,14 @@ for path in (UI_DIR, TESTS_DIR, os.path.join(REPO_ROOT, "scripts")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-MODULES = [
-    "bettercnc.capabilities",
-    "bettercnc.iniload",
-    "bettercnc.profiles",
-    "bettercnc.state",
-    "bettercnc.configmodel",
-    "bettercnc.adapter",
-    "bettercnc.viewmodel",
-    "bettercnc.render",
-    "bettercnc.app",
-]
+# Every module in the package, discovered rather than listed: a hand-kept list
+# silently left out bettercnc.mdi when it was added, so its lines were never
+# counted. __init__ only re-exports.
+MODULES = sorted(
+    "bettercnc." + name[:-3]
+    for name in os.listdir(PKG_DIR)
+    if name.endswith(".py") and name != "__init__.py"
+)
 
 
 def executable_lines(path: str) -> Set[int]:
