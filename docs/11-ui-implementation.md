@@ -19,7 +19,7 @@ note.
 | | |
 |---|---|
 | Stack | Python 3 stdlib only + server-side HTML |
-| Tests | 842, all passing, no expected failures, `make test` (793 UI + 49 in `scripts/test_grbl2ini.py`; 4 keymap tests run only where libxkbcommon is, e.g. `sim/sim.sh test`); also on arm64 + Python 3.13 in the simulator (`sim/sim.sh test`) |
+| Tests | 845, all passing, no expected failures, `make test` (796 UI + 49 in `scripts/test_grbl2ini.py`; 4 keymap tests run only where libxkbcommon is, e.g. `sim/sim.sh test`); also on arm64 + Python 3.13 in the simulator (`sim/sim.sh test`) |
 | Coverage | **99.5 %** (`make coverage`); `adapter.py` 99.0 % |
 | Screens | 6, as the prototype: Kontrol / Program / Probing / Takımlar / Alarmlar / Makine |
 | Profiles | `test-rig` (verified) and `marble` (TODO placeholders) |
@@ -873,7 +873,7 @@ Actions refuse as described under "How `LinuxCncAdapter` drives LinuxCNC".
 ## Tests
 
 ```bash
-make test          # 842 tests, everything incl. scripts/test_grbl2ini.py
+make test          # 845 tests, everything incl. scripts/test_grbl2ini.py
 make coverage      # 99.5 %
 ```
 
@@ -887,7 +887,7 @@ failure.
 | `test_deploy.py` | 99 | `deploy/` and the kiosk: INI derivation, the boot screen server, the screen guard over the DevTools pipe (incl. the real pipe), the browser watch, the kiosk keymap through libxkbcommon (in the container), the rules the scripts must hold (SSH key-only, the session's stop path, timings in the README) |
 | `test_capabilities.py` | 26 | the never-hidden contract, per capability; profile completeness; TODO vs ABSENT |
 | `test_config_traceability.py` | 25 | every hardware number vs the INI, read with an independent parser |
-| `test_edge_cases.py` | 74 | edited, sparse and half-measured INIs (continuation lines, repeats, section names, empty values, HOME_IGNORE_LIMITS parsing, comment runs); measured travel reaching every screen and the profile; the status-unknown display; a wired estop input; status-label priority; link trouble reaching the gate; the adapter contract; the LinuxCNC citations re-checked against `reference/` |
+| `test_edge_cases.py` | 77 | edited, sparse and half-measured INIs (continuation lines, repeats, section names, empty values, HOME_IGNORE_LIMITS parsing, comment runs); measured travel reaching every screen and the profile; the status-unknown display; a wired estop input; status-label priority; link trouble reaching the gate; the adapter contract; the LinuxCNC citations re-checked against `reference/` |
 | `test_estop.py` | 27 | hardware/software separation at three levels |
 | `test_homing_gate.py` | 32 | the gate, order from config, the drift detector, and the docs read from disk |
 | `test_inputmap_and_link.py` | 48 | verified input map, Z asymmetry, `.in_not`, link health incl. unreadable counters and packet loss alone |
@@ -911,7 +911,7 @@ The fidelity tests (in `test_linuxcnc_adapter.py` and `test_edge_cases.py`) read
 and argument formats, stat attributes, joint dict keys, message type numbers, the
 `hal` functions, the `estop_latch` component and the rig's HAL wiring, the GIL in
 `wait_complete`, every refusal text the fake emits, and the LinuxCNC facts the code cites.
-They match content, not line numbers: a citation's line range is not checked. Without `reference/` those 20 tests skip and the rest still run.
+They match content, not line numbers: a citation's line range is not checked. Without `reference/` those 20 tests skip, with the check that `reference/` is at its pin (`make reference`), and the rest still run.
 
 ### Coverage: 99.5 %
 

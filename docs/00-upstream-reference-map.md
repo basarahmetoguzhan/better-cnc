@@ -11,6 +11,8 @@ All paths are relative to `better-cnc/`.
 | LinuxCNC | `reference/linuxcnc` | `2.9` | `18c5bb5` | 340 MB |
 | hostmot2-firmware | `reference/hostmot2-firmware` | `master` | `c15c0c3` | 5.9 MB |
 
+`make reference` (`scripts/fetch-reference.sh`, full hashes there) fetches both at exactly these commits.
+
 Branch `2.9` existed on the remote, so no fallback to a `2.9.x` branch was needed.
 
 ---

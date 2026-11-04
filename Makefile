@@ -15,7 +15,7 @@ PYTHON ?= python3
 export PYTHONPATH := ui:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
-.PHONY: help test test-ui test-scripts coverage ui ui-marble dump lint clean sim-build sim sim-stop sim-test sim-kiosk sim-lint
+.PHONY: help test test-ui test-scripts coverage reference ui ui-marble dump lint clean sim-build sim sim-stop sim-test sim-kiosk sim-lint
 
 help:  ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -38,6 +38,9 @@ coverage:  ## line coverage for ui/bettercnc (stdlib tracer, no `coverage` pkg)
 
 coverage-missing:  ## coverage plus the uncovered line numbers
 	$(PYTHON) ui/tools/covreport.py --missing
+
+reference:  ## fetch reference/ (LinuxCNC + hostmot2 sources) at the pinned commits; 21 tests need it
+	scripts/fetch-reference.sh
 
 ui:  ## serve the operator UI for the test rig on :8080 (mock, not connected)
 	$(PYTHON) -m bettercnc.app --profile test-rig --port 8080
@@ -67,7 +70,7 @@ sim-test:  ## the whole test suite inside the simulator image (arm64, Python 3.1
 sim-kiosk:  ## deploy/'s kiosk in the simulator, headless; then: sim/sim.sh shot x.png
 	sim/sim.sh kiosk
 
-sim-lint:  ## shellcheck sim/ and deploy/, verify the kiosk's systemd unit
+sim-lint:  ## shellcheck sim/, deploy/ and scripts/, verify the kiosk's systemd unit
 	sim/sim.sh lint
 
 clean:  ## drop __pycache__

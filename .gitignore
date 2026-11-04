@@ -1,4 +1,4 @@
-# Read-only upstream clones — never committed, re-clone with scripts/ if needed
+# Read-only upstream clones — never committed; `make reference` fetches them at the pinned commits
 reference/
 
 # Python

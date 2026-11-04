@@ -14,7 +14,7 @@
 #   sim/sim.sh keys WTYPE-ARGS  type into the kiosk (wtype: its own keymap, so
 #                               this tests the page and policy, not the kiosk keymap)
 #   sim/sim.sh kiosk-down       stop it
-#   sim/sim.sh lint             shellcheck the sim/ and deploy/ scripts, verify the unit file
+#   sim/sim.sh lint             shellcheck the sim/, deploy/ and scripts/ shell scripts, verify the unit file
 #
 # The repo is mounted read-only at /repo, so edits on the Mac are live; restart
 # with `down` + `up` to pick up a changed INI, HAL or UI file.
@@ -85,7 +85,8 @@ case "$cmd" in
   lint)
     docker run --rm --platform linux/arm64 -e LANG=C.UTF-8 -v "$REPO:/repo:ro" -w /repo "$IMAGE" bash -c '
       shellcheck -x sim/*.sh deploy/kiosk.sh deploy/machine.sh deploy/bootstrap-ssh.sh \
-        deploy/kiosk-session deploy/bettercnc-display deploy/kiosk-browser sim/headless_display.sh &&
+        deploy/kiosk-session deploy/bettercnc-display deploy/kiosk-browser sim/headless_display.sh \
+        scripts/fetch-reference.sh scripts/detect-board.sh &&
       echo "shellcheck: temiz" &&
       sed -e "s|@USER@|cnc|g" -e "s|@HOME@|/home/cnc|g" -e "s|@REPO@|/repo|g" \
           -e "s|@INI@|/repo/configs/test-rig/test-rig.ini|g" -e "s|@PROFILE@|test-rig|g" -e "s|@LAYOUT@|tr|g" \

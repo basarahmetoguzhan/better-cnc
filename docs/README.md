@@ -62,7 +62,7 @@ actually is, then [PLAN-BUGUN.md](PLAN-BUGUN.md) for what is left to do on the t
 | 08 | [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md) | Board pinout from the vendor's own annotated diagram — connectors, terminals, silkscreen. In Turkish. **Corrected 2026-08-05**: the 7i96 comparison table was the wrong family and is now a 7i92 comparison. Its connector observations were right and cross-check cleanly against the dumps. | **VERIFIED** (connectors) |
 | 09 | [09-tb6560-drivers.md](09-tb6560-drivers.md) | TB6560 stepper driver analysis — where `steplen`/`stepspace`/`dirsetup`/`dirhold` come from, and the 15 kHz STEP-frequency ceiling that caps axis velocity. In Turkish. | **DERIVED** |
 | **10** | [**10-7i92-pinout-verified.md**](10-7i92-pinout-verified.md) | ⭐ **The real pin map.** All 34 IO pins from `mesaflash --readhmid` and `--print-pd`: IO number, port (P2 = 0–16, P1 = 17–33), secondary function, vendor terminal, HAL pin name. Plus IDROM summary, module inventory, the GPIO budget (28 of 34 available), and a full account of the 7i96→7i92 correction. **Wire from this document.** | ✅ **VERIFIED** |
-| **11** | [11-ui-implementation.md](11-ui-implementation.md) | **Operator UI implementation.** Stack choice (Python stdlib + server-side HTML) and why; the data-driven capability model that renders absent features disabled rather than hidden; the LinuxCNC data boundary; what is mocked vs real; and a table of all **24 prototype facts corrected** with citations. Code in [ui/](../ui/), 842 tests, 99.5% coverage (2026-10-21). | **DERIVED**, run against a real LinuxCNC 2.9.9 in [sim/](../sim/README.md), not yet on the machine |
+| **11** | [11-ui-implementation.md](11-ui-implementation.md) | **Operator UI implementation.** Stack choice (Python stdlib + server-side HTML) and why; the data-driven capability model that renders absent features disabled rather than hidden; the LinuxCNC data boundary; what is mocked vs real; and a table of all **24 prototype facts corrected** with citations. Code in [ui/](../ui/), 845 tests, 99.5% coverage (2026-11-04). | **DERIVED**, run against a real LinuxCNC 2.9.9 in [sim/](../sim/README.md), not yet on the machine |
 | — | [../sim/README.md](../sim/README.md) | **The simulator.** Real LinuxCNC 2.9.9 in Docker on the Mac, arm64 like the Pi 4; the rig's own INI with the board, steps and switches simulated. The UI and the kiosk are tried there before the machine. In Turkish. | runs (2026-10-19) |
 | — | [../deploy/README.md](../deploy/README.md) | **Kiosk and remote access.** Power on → LinuxCNC → our UI, full screen, no way out to a desktop; the machine reached from the Mac over SSH (key only) instead of USB. In Turkish. | tried in [sim/](../sim/README.md); not yet installed on the machine |
 | — | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | **Blocker register** — B1–B7, three now closed (B2, B3, B4) and B5 downgraded to non-blocking, each with who answers it, what it blocks, and space for the dated answer. Answers are struck through, never deleted, so the decision history survives. In Turkish. Organised by *what it blocks*; [04](04-zhulong-board-hardware.md)'s Q-list covers overlapping ground organised by *how `readhmid` settles it*. | **DERIVED** |
@@ -279,8 +279,8 @@ against the wrong board family entirely.
 - **Source citations** are file-and-line into `reference/`, e.g.
   [hm2_eth.c:1319](../reference/linuxcnc/src/hal/drivers/mesa-hostmot2/hm2_eth.c#L1319).
   Every such link was checked to resolve with an in-range line number, and its content
-  anchor verified, as of the last edit. `reference/` is gitignored — re-clone with the
-  commands in [00](00-upstream-reference-map.md) if it is missing.
+  anchor verified, as of the last edit. `reference/` is gitignored — `make reference`
+  fetches it at the commits listed in [00](00-upstream-reference-map.md) if it is missing.
 - **OBSERVED / INFERRED / UNVERIFIED** in [04](04-zhulong-board-hardware.md) distinguish
   photograph evidence from reasoning from guesswork. The distinction is enforced
   strictly.
@@ -298,3 +298,18 @@ partly superseded, [08](08-zhulong-pinout-confirmed.md) corrected,
 [10](10-7i92-pinout-verified.md) added, B2 closed and B5 downgraded (B3 and B4 had already
 closed on 2026-08-03, from the vendor diagram and the driver markings). The next status
 changes come from the [PLAN-BUGUN.md](PLAN-BUGUN.md) gates (scale, travel, homing).
+
+## Setting up on a new computer
+
+Everything the code needs is in git, except what is deliberately kept out:
+
+1. `git clone git@github.com:basarahmetoguzhan/better-cnc.git`, then `make test` - Python 3.9 or
+   newer, stdlib only, nothing to install.
+2. `make reference` - the LinuxCNC and hostmot2 sources the docs and 21 tests cite, at the exact
+   commits (`scripts/fetch-reference.sh`, ~350 MB).
+3. For the simulator: Docker with arm64 support (native on Apple Silicon), then `sim/sim.sh build`
+   ([sim/README.md](../sim/README.md)).
+4. For the machine: the SSH key that GitHub has for this account and `deploy/machine.local`
+   ([deploy/README.md](../deploy/README.md)); `deploy/machine.sh bootstrap` makes the latter.
+5. Not in git on purpose, copied by hand from the old computer: [PLAN-BUGUN.md](PLAN-BUGUN.md) and
+   any personal notes.

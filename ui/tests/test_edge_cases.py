@@ -1610,5 +1610,50 @@ class TestLinuxCncCitations(unittest.TestCase):
         )
 
 
+class TestReferencePins(unittest.TestCase):
+    """reference/ is gitignored; scripts/fetch-reference.sh brings it back at
+    the commits every citation was checked against. Before 2026-11-04 the repo
+    held no way to fetch it at all (the commands lived outside it)."""
+
+    def pins(self):
+        with open(os.path.join(REPO_ROOT, "scripts", "fetch-reference.sh"), encoding="utf-8") as fh:
+            script = fh.read()
+        return dict(re.findall(r'"([\w-]+) https://github\.com/LinuxCNC/[\w-]+\.git ([0-9a-f]{40})"', script))
+
+    def test_the_pins_are_the_commits_docs_00_records(self):
+        pins = self.pins()
+        self.assertEqual(sorted(pins), ["hostmot2-firmware", "linuxcnc"])
+        with open(os.path.join(REPO_ROOT, "docs", "00-upstream-reference-map.md"), encoding="utf-8") as fh:
+            table = fh.read()
+        for name, commit in pins.items():
+            with self.subTest(name=name):
+                self.assertRegex(table, r"`reference/{}` \| `[^`]+` \| `{}`".format(
+                    re.escape(name), commit[:7]))
+
+    def test_a_present_reference_is_at_its_pin(self):
+        """A reference/ updated without its pin would make every line
+        citation quietly drift."""
+        import subprocess
+        checked = 0
+        for name, commit in self.pins().items():
+            path = os.path.join(REPO_ROOT, "reference", name)
+            if not os.path.isdir(os.path.join(path, ".git")):
+                continue
+            head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+            with self.subTest(name=name):
+                self.assertEqual(head, commit)
+            checked += 1
+        if not checked:
+            self.skipTest("reference/ not present (make reference)")
+
+    def test_make_reference_runs_the_script(self):
+        with open(os.path.join(REPO_ROOT, "Makefile"), encoding="utf-8") as fh:
+            makefile = fh.read()
+        self.assertIn("reference:  ##", makefile)
+        self.assertIn("\tscripts/fetch-reference.sh\n", makefile)
+        self.assertTrue(os.access(os.path.join(REPO_ROOT, "scripts", "fetch-reference.sh"), os.X_OK))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
