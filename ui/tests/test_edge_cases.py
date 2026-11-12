@@ -1633,19 +1633,22 @@ class TestReferencePins(unittest.TestCase):
     def test_a_present_reference_is_at_its_pin(self):
         """A reference/ updated without its pin would make every line
         citation quietly drift."""
+        import shutil
         import subprocess
-        checked = 0
-        for name, commit in self.pins().items():
-            path = os.path.join(REPO_ROOT, "reference", name)
-            if not os.path.isdir(os.path.join(path, ".git")):
-                continue
-            head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"],
-                                  capture_output=True, text=True).stdout.strip()
-            with self.subTest(name=name):
-                self.assertEqual(head, commit)
-            checked += 1
-        if not checked:
+        present = {name: commit for name, commit in self.pins().items()
+                   if os.path.isdir(os.path.join(REPO_ROOT, "reference", name, ".git"))}
+        if not present:
             self.skipTest("reference/ not present (make reference)")
+        # sim/'s image has no git, yet it sees reference/ through the bind mount
+        # (found 2026-11-12, the first `make sim-test` with reference/ present).
+        if shutil.which("git") is None:
+            self.skipTest("git not installed (sim/'s image has none; the Mac runs this check)")
+        for name, commit in present.items():
+            run = subprocess.run(["git", "-C", os.path.join(REPO_ROOT, "reference", name),
+                                  "rev-parse", "HEAD"], capture_output=True, text=True)
+            with self.subTest(name=name):
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertEqual(run.stdout.strip(), commit)
 
     def test_make_reference_runs_the_script(self):
         with open(os.path.join(REPO_ROOT, "Makefile"), encoding="utf-8") as fh:
