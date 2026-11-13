@@ -4,10 +4,11 @@ Bu dosya, cevaplanmadan ilerlenemeyecek soruların kaydıdır. Her soru
 cevaplandığında **buraya cevabı ve tarihi yazılır** — silinmez, üstü çizilir.
 Karar geçmişini burada tutuyoruz.
 
-Son güncelleme: 2026-10-18 (doküman temizliği + mermer makinelerinin Zhulong'da kalması kararı, bkz. B7; cevaplar 2026-08-03 ve 2026-08-05'ten)
+Son güncelleme: 2026-11-12 (test tezgahında Faz 1–8: B3/B4 düzeltildi, B8–B12 eklendi; önceki: 2026-10-18 doküman temizliği + mermer makinelerinin Zhulong'da kalması kararı, bkz. B7; cevaplar 2026-08-03 ve 2026-08-05'ten)
 
 > **Not (2026-10-18):** Bu dosyadaki "Faz N" numaraları projenin ilk (mermer) planındaki
-> fazlardır — `PLAN-BUGUN.md`'deki test tezgahı Faz 1–9 ile karıştırma.
+> fazlardır — `PLAN-BUGUN.md`'deki test tezgahı Faz 1–9 ile karıştırma. B8–B12 test tezgahının
+> işleri; onlarda geçen faz numaraları "test tezgahı Faz N" diye yazılı.
 
 ---
 
@@ -60,7 +61,9 @@ switch'i / probe / debi sensörü için de yer kalıyor.
 
 Ayrıca kart 6 StepGen sağlıyor ve biz 3 kullanıyoruz, yani dördüncü eksen
 (Y-sağ) için StepGen 3, IO 10/11'de firmware değişikliği olmadan hazır
-([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)).
+([10-7i92-pinout-verified.md](10-7i92-pinout-verified.md)). *(2026-11-12 notu: test tezgahında
+Y'de de iki motor çıktı; StepGen 3 orada Y'nin ikinci sürücüsünü sürüyor — `num_stepgens=4`,
+hareketle doğrulandı. Mermer makinesi için B1 yine açık.)*
 
 **Yani B1 artık bir tasarım kısıtı değil, sadece bir bilgi eksiği.** Cevabı hâlâ
 gerekiyor — kaç joint tanımlayacağımızı, `trivkins coordinates=XYYZ` mi `XYZ` mi
@@ -118,15 +121,15 @@ firmware onları talep *edebiliyor* ama etmek zorunda değil:
 |---|---:|---|
 | Kalıcı GPIO (IO 20-24) | 5 | Secondary Tag **hiç yok** — hiçbir config ile kaybedilemez |
 | Encoder pinleri (IO 25-33) | 9 | `num_encoders=0` ile serbest |
-| Kullanılmayan StepGen 3-5 (IO 10-15) | 6 | `num_stepgens=3` ile serbest |
+| Kullanılmayan StepGen ~~3-5 (IO 10-15)~~ 4-5 (IO 12-15) | ~~6~~ 4 | ~~`num_stepgens=3`~~ `num_stepgens=4` ile serbest (2026-11-12: StepGen 3 test tezgahında Y'nin ikinci motorunda) |
 | PWM (IO 16) | 1 | serbest, ama mermer makinede spindle için gerekecek |
 | SSerial (IO 0-3) | 4 | `sserial_port_0=xxxxxxxx` ile serbest |
-| **Toplam GPIO** | **28** | 34 pinin 28'i; 6'sı üç stepgen'de |
+| **Toplam GPIO** | ~~**28**~~ **26** | 34 pinin 26'sı; 8'i dört stepgen'de (2026-11-12'ye kadar 28 / 6 / üç). Giriş sayısı (14) değişmedi |
 
 **B1 (çift Y motoru) artık giriş bütçesi açısından sorun değil.** En kötü senaryo —
 çift motorlu portal Y — 4 home + 1 e-stop + 1 takım sensörü = **6 giriş** istiyor.
 Elimizde 5 kalıcı + 9 encoder = **14 giriş** var, artı dördüncü eksen için
-StepGen 3 (IO 10/11) firmware değişikliği olmadan hazır. Rahatça sığıyor.
+StepGen 3 (IO 10/11) firmware değişikliği olmadan hazır (test tezgahında 2026-11-12'den beri Y'nin ikinci motorunda). Rahatça sığıyor.
 
 Not: kart 7i96 değil **7i92** çıktı (34 IO, 51 değil) — bu, kullanılabilir pin
 sayısını düşürdü ama yine de fazlasıyla yetiyor. Bkz.
@@ -149,16 +152,22 @@ Her AXIS bloğunun 4 terminali: `GND` `STEP` `DIR` `5V`.
 Dördüncü terminal diferansiyel çiftin eşi değil, **5V beslemesi** — optokuplörlü
 sürücülerin anot ucunu beslemek için konmuş.
 
-Sonuç: ortak anot bağlantı kullanılıyor, `5V → CLK+/CW+`, `STEP → CLK−`,
-`DIR → CW−`. Detay: [09-tb6560-drivers.md](09-tb6560-drivers.md).
+Sonuç: ~~ortak anot bağlantı kullanılıyor, `5V → CLK+/CW+`, `STEP → CLK−`,
+`DIR → CW−`.~~ **Düzeltme (2026-11-12, makinede görüldü ve ölçüldü):** test tezgahı **ortak
+katot** bağlı — `5V` boş, `CLK−`/`CW−` GND'de, `STEP → CLK+`, `DIR → CW+`; kartın çıkışları
+3,3 V lojik ve bir çıkış yalnız bir sürücüyü sürebiliyor. "Tek uçlu" cevabı değişmedi. Detay:
+[09-tb6560-drivers.md](09-tb6560-drivers.md).
 
 ---
 
 ## ✅ B4 — Sürücüler 5V mi 24V sinyal bekliyor? — KAPANDI (test tezgahı için)
 
 **Cevap (2026-08-03):** Test tezgahında sürücüler **TB6560**. Girişleri
-optokuplörlü ve Zhulong'un 5V hattıyla doğrudan sürülüyor — seviye çevirici
-gerekmiyor.
+optokuplörlü ve ~~Zhulong'un 5V hattıyla~~ doğrudan sürülüyor — seviye çevirici
+gerekmiyor. **Düzeltme (2026-11-12):** sürücüler kartın 5V hattıyla değil, **3,3 V lojik**
+`STEP`/`DIR` çıkışlarıyla sürülüyor (ortak katot, 5V boş). Tek sürücüde `DIR` yüksek seviyesi
+3,11 V; aynı çıkışa iki sürücü bağlıyken 2,43 V'a düştü ve iki sürücü de yönü göremedi →
+**bir çıkış = bir sürücü** (Y'nin ikinci sürücüsü AXIS 3'e taşındı).
 
 Detaylı zamanlama, akım ayarı ve 15 kHz hız tavanı:
 [09-tb6560-drivers.md](09-tb6560-drivers.md).
@@ -248,6 +257,11 @@ test tezgahında — ucuz makine, sonuçsuz hata. Adım kaybı semptomu görül�
 
 **Cevap:** Saat 100 MHz (IDROM). Bağımsız fiziksel doğrulama bekliyor, blocker değil.
 
+*(2026-11-12 notu: test tezgahı Faz 1–8'i bu zamanlamayla geçti. Görülen iki adım kaybının biri
+X'in motor kablosundaki temassızlıktı — onarımdan sonra homing tekrarı 0,0017 mm —, diğeri Z'nin
+program koşusu başına ~0,02 mm tek yönlü kayması; şüphe ivmede, B8. İvme denemesi kaymayı
+gidermezse step zamanlaması ve bu madde öne alınır.)*
+
 ---
 
 ## 🟡 B6 — İzole girişler 24V sensörü doğrudan kabul ediyor mu?
@@ -297,13 +311,105 @@ Detay: [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md).
 
 ---
 
+## 🟡 B8 — Z neden her program koşusunda tek yönde kayıyor?
+
+**Durum:** AÇIK (2026-11-12, test tezgahı Faz 8)
+**Kim cevaplar:** Makinede deneme
+**Neyi bloke ediyor:** hiçbir şeyi — test tezgahı Faz 8 bu şerhle kabul edildi; ama uzun programda Z derinliği birikerek kayar
+
+Test tezgahı Faz 8'de `nc_files/faz8-kare.ngc` dört kez hatasız koştu. Üç koşudan sonra
+homing'in `joint.N.motor-offset`'leriyle bakılan adım kaybı: Y 0,0001, X 0,036, **Z 0,066 mm** —
+Z tek yönde, koşu başına ~0,02 mm. Şüphe: Z için 50 mm/s² ivme yerçekimine karşı fazla.
+
+**Yapılacak:** Z'nin `MAX_ACCELERATION`'ını (`[JOINT_2]` ve `[AXIS_Z]`) 25 mm/s²'ye indir,
+Faz 8 kontrolünü tekrarla.
+
+**Cevap:** _(bekliyor)_
+
+---
+
+## 🟡 B9 — Y'nin iki yanı kare kalıyor mu?
+
+**Durum:** AÇIK — test tezgahı Faz 4'te ertelendi
+**Kim cevaplar:** Makinede, portalın iki yanını ayrı ayrı ölçerek
+**Neyi bloke ediyor:** hiçbir şeyi; kesimde köşegen hatası olarak görünür
+
+Y'nin iki motoru tek eklem: `stepgen.01` (AXIS 1) ve `stepgen.03` (AXIS 3) aynı komutu alıyor,
+ayrı referans ve kareleme yok. Faz 3 doğrulamasında 50,005 mm komutta sol 50,3, sağ 49,7 mm gitti.
+İki yanın birbirine göre kayıp kaymadığı (racking) ölçülmedi.
+
+**Cevap:** _(bekliyor)_
+
+---
+
+## 🟡 B10 — PC normal açılışta neden kararıyor?
+
+**Durum:** AÇIK (2026-11-12)
+**Kim cevaplar:** Makinede, açılış ve ekran kartı denemeleriyle
+**Neyi bloke ediyor:** kiosk kurulumu — güç verilince kendiliğinden doğru açılması ([../deploy/README.md](../deploy/README.md))
+
+Binadaki elektrik kesintisinden sonra PC yalnız GRUB failsafe modunda kullanılabilir açılıyor
+(`noapic noapm nodma nomce nosmp nosplash vga=788`, tek CPU). Normal modda masaüstü arka planından
+sonra ekran kararıyor; persistence (`/dev/sda2`, ext3) temiz. Monitör AMD iGPU'da (HDMI); PC'de
+ayrıca bir NVIDIA GA102 var.
+
+Failsafe'te servo-thread `tmax` ~0,52 ms, paket hatası 0 — önceki normal modun (çok çekirdek)
+3,4 ms'sinden iyi. Tek çekirdekte Firefox açmak `tmax`'ı 1,25 ms'ye çıkardı (servo periyodu 1 ms).
+Failsafe parametreleri gecikme için iyi, ama kiosk'un tarayıcısı tek çekirdekte risk; BIOS / gecikme
+ayarı aynı işin parçası.
+
+**Cevap:** _(bekliyor)_
+
+---
+
+## 🟡 B11 — USB Wi-Fi çubuğu SSH için yeterli mi?
+
+**Durum:** AÇIK (2026-11-12)
+**Kim cevaplar:** Daha iyi bir çubuk ya da kablolu LAN denemesi
+**Neyi bloke ediyor:** Mac'ten güvenilir erişim (`deploy/machine.sh`)
+
+Çubuk sık kopuyor. PC'nin ev ağındaki adresi 192.168.1.104'ten .107'ye değişti
+(`deploy/machine.local`). Erişim noktası istemcilerin MAC adresini değiştirdiği için ARP PC'yi
+tanıtamıyor; makine adı `debian` kullanılmalı. Kablolu LAN için kartın kullanmadığı bir Ethernet
+portu ya da USB Ethernet adaptörü gerekir: PC'nin kendi portu karta ayrıldı
+([../deploy/README.md](../deploy/README.md), `board-network`).
+
+**Cevap:** _(bekliyor)_
+
+---
+
+## 🟡 B12 — Arayüz AXIS'in yanında yalnız izleme olarak nasıl çalışır?
+
+**Durum:** AÇIK (2026-11-12) — Faz 9'da depoya `--observe` eklendi; makinede AXIS'in yanında denenince kapanır
+**Kim cevaplar:** Arayüz geliştirmesi (`ui/`)
+**Neyi bloke ediyor:** arayüzün kiosk'tan önce gerçek makinede, AXIS'le yan yana denenmesi
+
+2026-11-12'de arayüz depo dışındaki bir izleyiciyle AXIS'in yanında yalnız izleme olarak
+çalıştırıldı. O gün depodaki uygulama bunu kendisi yapamıyordu: `io_error` varken sayfa yüklenince
+`state(STATE_ESTOP)` gönderiyordu (`_stop_on_link_fault`) ve NML hata kanalını boşaltıyordu
+(`_drain_errors`); ikisi de AXIS'in yanında çalışmayla çelişiyordu. O gün görülen diğer kusurlar:
+[11-ui-implementation.md](11-ui-implementation.md) "Known gaps".
+
+**Cevap (kısmi, Faz 9):** `--observe` —
+`python3 -m bettercnc.app --adapter linuxcnc --observe --ini FILE`
+([../ui/README.md](../ui/README.md)). Hata kanalı hiç açılmıyor, LinuxCNC'nin mesajları AXIS'te
+kalıyor; ekrandan yalnız yazılım acil stop'u gidiyor, diğer düğmeler kapalı ve her ekran salt
+izleme olduğunu söylüyor. Kart bağlantısı koparsa giden acil stop bilerek kaldı: gerçek sürücüde
+kablo kopunca yalnız `io_error` kalkıyor, LinuxCNC makineyi AÇIK tutuyor (DURUM, 2026-10-21
+denetimi). Yalnız `fake_linuxcnc` ile test edildi (`ui/tests/test_observe_and_live_hal.py`);
+makinede AXIS'in yanında henüz denenmedi.
+
+---
+
 ## Kapanmış sorular
 
 | # | Soru | Cevap | Tarih |
 |---|---|---|---|
 | B2 | Encoder pinleri GPIO olur mu? | Evet: `num_encoders=0` ile IO 25-33 GPIO (FPGA tarafı); klemens ön ucu ohmmetreyle doğrulanmadı | 2026-08-05 |
-| B3 | AXIS blokları diferansiyel mi? | Hayır, tek uçlu: `GND/STEP/DIR/5V` | 2026-08-03 |
-| B4 | Sürücüler 5V mi 24V mi? | Test tezgahı: TB6560, optokuplörlü, 5V doğrudan. Mermer makinesi için hâlâ açık | 2026-08-03 |
+| B3 | AXIS blokları diferansiyel mi? | Hayır, tek uçlu: `GND/STEP/DIR/5V`. Test tezgahı ortak katot bağlı, `5V` boş (2026-11-12) | 2026-08-03 |
+| B4 | Sürücüler 5V mi 24V mi? | Test tezgahı: TB6560, optokuplörlü, ~~5V~~ kartın 3,3 V çıkışıyla doğrudan; bir çıkış = bir sürücü (düzeltme 2026-11-12). Mermer makinesi için hâlâ açık | 2026-08-03 / 2026-11-12 |
 | — | Giriş etiketleri (20-24) global IO numarası mı? | Evet. Üretici diyagramında `PIN20`…`PIN24` | 2026-08-03 |
 | — | Test tezgahı firmware'i ne? | GRBL 1.1 (varsayılan parmak izinden) | 2026-08-03 |
 | — | Hangi RJ45 Ethernet? | En alttaki, LED'li olan | 2026-08-03 |
+| — | Test tezgahında Y'de kaç motor? | İki (iki TB6560); ikinci sürücü AXIS 3 / `stepgen.03`'e taşındı | 2026-11-12 |
+| — | Test tezgahının Y DIR arızası nerede? | Kabloda değil: iki sürücü tek 3,3 V çıkıştaydı, çıkış iki optokuplörü süremiyordu | 2026-11-12 |

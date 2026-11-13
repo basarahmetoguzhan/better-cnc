@@ -255,7 +255,7 @@ def render_estop(p: Dict[str, Any]) -> str:
             "Yazılım sıfırla",
             "software_reset",
             p["reset_enabled"],
-            p["reset_blocked_reason"],
+            p["reset_disabled_reason"],
         )
         + "</div>"
     )
@@ -310,7 +310,9 @@ def render_homing(p: Dict[str, Any]) -> str:
         if p["shares_warning"]
         else ""
     )
-    btn = '<div class="row">{}</div>'.format(button("Tümünü referansla", "home_all"))
+    btn = '<div class="row">{}</div>'.format(
+        button("Tümünü referansla", "home_all", p["home_enabled"], p["home_disabled_reason"])
+    )
     return card(
         "Referans alma",
         order + note + shares + '<div class="home-chips">{}</div>'.format("".join(chips)) + btn,
@@ -380,7 +382,10 @@ def render_dro(c: Dict[str, Any]) -> str:
     )
     wcs = '<div class="row">{}</div>'.format(
         "".join(
-            button(w, "wcs", True, value=w, kind="chip" + (" on" if w == c["wcs"] else ""))
+            button(
+                w, "wcs", c["commands_enabled"], c["commands_disabled_reason"], value=w,
+                kind="chip" + (" on" if w == c["wcs"] else ""),
+            )
             for w in c["wcs_options"]
         )
     )
@@ -410,8 +415,8 @@ def render_jog(c: Dict[str, Any]) -> str:
     zcol = "".join([jb("Z+", "Z", 1), '<span class="jog-empty"></span>', jb("Z−", "Z", -1)])
     steps = "".join(
         button(
-            "{:g}".format(s), "jog_step", True, value=str(s),
-            kind="chip" + (" on" if abs(s - c["jog_step"]) < 1e-9 else ""),
+            "{:g}".format(s), "jog_step", c["commands_enabled"], c["commands_disabled_reason"],
+            value=str(s), kind="chip" + (" on" if abs(s - c["jog_step"]) < 1e-9 else ""),
         )
         for s in c["jog_steps"]
     )
@@ -423,11 +428,14 @@ def render_jog(c: Dict[str, Any]) -> str:
         for f in c["feed_overrides"]
     )
     # A disabled chip's reason is also written out: the title tooltip alone
-    # does not show on a touch screen.
-    feed_reasons = []
+    # does not show on a touch screen. Not twice, though: in observer mode
+    # the chips give the jog banner's own reason.
+    feed_reasons = [c["jog_disabled_reason"]] if not c["can_jog"] else []
+    shown = len(feed_reasons)
     for f in c["feed_overrides"]:
         if not f["enabled"] and f["reason"] not in feed_reasons:
             feed_reasons.append(f["reason"])
+    feed_reasons = feed_reasons[shown:]
     feed_note = "".join(
         '<div class="cap-reason">{}</div>'.format(e(r)) for r in feed_reasons
     )
@@ -541,10 +549,10 @@ def render_program(vm: Dict[str, Any]) -> str:
         "Başlat",
         "program_start",
         p["can_start"],
-        p["gate"]["headline"] or "Program yüklenmedi",
+        p["start_disabled_reason"],
         kind="primary",
     )
-    stop = button("Durdur", "program_stop", True)
+    stop = button("Durdur", "program_stop", p["stop_enabled"], p["stop_disabled_reason"])
     loaded = (
         '<div class="kv"><span class="kv-l">Yüklü</span><span class="kv-v">{}</span></div>'.format(
             e(p["loaded"] or "—")
@@ -631,25 +639,33 @@ def render_alarmlar(vm: Dict[str, Any]) -> str:
     if a["inputs"]:
         rows = [
             '<div class="in-row head"><span>Pin</span><span>İşlev</span>'
-            "<span>HAL</span><span>Polarite</span></div>"
+            "<span>HAL</span><span>Polarite</span><span>Durum</span></div>"
         ]
         for i in a["inputs"]:
             rows.append(
-                '<div class="in-row" data-pin="{pin}" data-readonly="1">'
+                '<div class="in-row" data-pin="{pin}" data-readonly="1" data-state="{st}">'
                 '<span class="in-pin">{pin}</span>'
                 '<span class="in-label">{label}</span>'
                 '<code class="hal">{hal}</code>'
                 '<span class="in-pol">{pol}</span>'
+                '<span class="in-state" style="color:{col}">{state}</span>'
                 "</div>".format(
                     pin=e(i["pin"]),
+                    st=e(i["state"]),
                     label=e(i["label"]),
                     hal=e(i["hal_pin"]),
                     pol=e(i["polarity_note"]),
+                    col=SEV_COLOR.get(i["state_severity"], MUTED_DIM),
+                    state=e(i["state_label"]),
                 )
             )
-        inputs_body = "".join(rows) + banner(
-            "Girişler salt okunur — makinenin bize söylediği şeydir, ayarlanmaz.",
-            "info",
+        inputs_body = (
+            "".join(rows)
+            + '<div class="in-note">{}</div>'.format(e(a["inputs_live_note"]))
+            + banner(
+                "Girişler salt okunur — makinenin bize söylediği şeydir, ayarlanmaz.",
+                "info",
+            )
         )
     else:
         inputs_body = '<div class="empty">{}</div>'.format(e(a["inputs_empty_reason"]))
@@ -733,9 +749,22 @@ def render_makine(vm: Dict[str, Any]) -> str:
                 )
             )
         axes_card = card("Eksenler", "".join(rows), sub="INI'den okundu")
+        live = (
+            '<div class="kv-wrap">{}</div>'.format(kv_rows(m["timing_live_rows"]))
+            if m["timing_live_rows"]
+            else '<div class="empty">{}</div>'.format(e(m["timing_live_note"]))
+        )
         timing = card(
             "Step zamanlaması",
-            kv_rows(m["timing_rows"])
+            '<div class="row-label">INI</div>'
+            + kv_rows(m["timing_rows"])
+            + '<div class="row-label">Canlı (HAL)</div>'
+            + live
+            + (
+                '<div class="in-note">{}</div>'.format(e(m["timing_live_note"]))
+                if m["timing_live_rows"]
+                else ""
+            )
             + '<div class="cap-reason">{}</div>'.format(e(m["timing_note"])),
         )
     else:
@@ -783,14 +812,25 @@ def render_screen(vm: Dict[str, Any]) -> str:
     return fn(vm)
 
 
+def render_observe(o: Dict[str, Any]) -> str:
+    """Observer mode's banner (app.py --observe), at the top of every
+    screen and kept in view while it scrolls (app.css .observe); "" in
+    normal mode."""
+    if not o["active"]:
+        return ""
+    return '<div class="observe" data-observe="1" role="status">{}</div>'.format(
+        banner("{}. {}".format(o["banner"], o["detail"]), "warn")
+    )
+
+
 def render_body(vm: Dict[str, Any]) -> str:
     """Header + nav + active screen. This is what the poll swaps in."""
     msg = vm["status"]["message"]
     return (
         render_header(vm)
         + render_nav(vm)
-        + '<main class="main" data-screen="{}">{}</main>'.format(
-            e(vm["screen"]), render_screen(vm)
+        + '<main class="main" data-screen="{}">{}{}</main>'.format(
+            e(vm["screen"]), render_observe(vm["observe"]), render_screen(vm)
         )
         + '<footer class="msg">{}</footer>'.format(e(msg))
     )

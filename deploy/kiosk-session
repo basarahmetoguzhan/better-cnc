@@ -146,6 +146,10 @@ $(tail -n 5 "$RUN/ini.err")"
     last=" Önceki durma: $(head -n 1 "$BETTERCNC_LAST_STOP_FILE")"
   fi
   say "Makinenin kontrol sistemi başlatılıyor… (deneme $n).$last"
+  # A TERM shutdown - stop() above, or the service's - can leave LinuxCNC's
+  # motion shared memory behind, and every start after it would fail
+  # (2026-11-12). Removed first, only while no LinuxCNC process runs.
+  "$DEPLOY_DIR/kiosk.sh" clean-shm >&2
   # No X DISPLAY and no tty, on purpose (reference/linuxcnc/scripts/linuxcnc.in):
   # with DISPLAY set and no tty the script opens Tk windows over the kiosk
   # and waits for a click - "LinuxCNC terminated with an error" (:231-256,

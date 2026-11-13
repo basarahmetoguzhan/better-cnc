@@ -11,28 +11,28 @@ from __future__ import annotations
 
 import unittest
 
-from helpers import ALL_SCREENS, all_html
+from helpers import ALL_SCREENS, all_html, ini_raw_values
 
 #: (prototype value, why it is wrong, repo citation)
 FORBIDDEN = [
     # 1 - input map was fabricated
     ("gpio.025", "only gpio.020-024 are wired as inputs on the test rig", "docs/DURUM.md:73-80"),
     ("Acil stop zinciri</span>", "no estop input on the test rig", "docs/DURUM.md:69-80"),
-    # 2 - axis numbers were ~50x wrong
-    ("80.000 adım/mm", "X/Y scale is 833.300 / 823.500", "configs/test-rig/test-rig.ini"),
-    ("400.000 adım/mm", "Z scale is 1250.000", "configs/test-rig/test-rig.ini"),
-    ("40 mm/s", "max velocity is 3 mm/s for first run", "configs/test-rig/test-rig.ini"),
-    ("500 mm/s²", "acceleration is 10 mm/s²", "configs/test-rig/test-rig.ini"),
-    ("300 mm/s²", "acceleration is 10 mm/s²", "configs/test-rig/test-rig.ini"),
+    # 2 - axis numbers were invented
+    ("80.000 adım/mm", "X/Y SCALE is the INI's, measured in Faz 3", "configs/test-rig/test-rig.ini"),
+    ("400.000 adım/mm", "Z SCALE is the INI's, measured in Faz 3", "configs/test-rig/test-rig.ini"),
+    ("40 mm/s", "max velocity is the INI's MAX_VELOCITY", "configs/test-rig/test-rig.ini"),
+    ("500 mm/s²", "acceleration is the INI's MAX_ACCELERATION", "configs/test-rig/test-rig.ini"),
+    ("300 mm/s²", "acceleration is the INI's MAX_ACCELERATION", "configs/test-rig/test-rig.ini"),
     # 3 - step timing would drop pulses through the TB6560 optocouplers
     ("2 000 ns", "steplen/stepspace are 10 000 ns", "docs/09-tb6560-drivers.md"),
     ("20 000 ns", "dirsetup/dirhold are 50 000 ns", "docs/09-tb6560-drivers.md"),
     # 4 - wrong architecture
-    ("arm64", "the controller is amd64 (live USB on a laptop)", "docs/DURUM.md:22"),
-    # 5 - travel was never measured
-    ("0 – 300 mm", "travel unmeasured", "configs/test-rig/test-rig.ini ASSUMPTION"),
-    ("0 – 180 mm", "travel unmeasured", "configs/test-rig/test-rig.ini ASSUMPTION"),
-    ("−45 – 0 mm", "travel unmeasured", "configs/test-rig/test-rig.ini ASSUMPTION"),
+    ("arm64", "the controller is amd64 (live USB on a PC)", "docs/DURUM.md:22"),
+    # 5 - travel was invented (measured since Faz 4: the INI's MIN/MAX_LIMIT)
+    ("0 – 300 mm", "travel is the INI's", "configs/test-rig/test-rig.ini"),
+    ("0 – 180 mm", "travel is the INI's", "configs/test-rig/test-rig.ini"),
+    ("−45 – 0 mm", "travel is the INI's", "configs/test-rig/test-rig.ini"),
     # 6 - latency was never measured
     ("38 µs", "latency-test was never run", "docs/DURUM.md"),
     # 7 - capabilities that do not exist
@@ -40,7 +40,7 @@ FORBIDDEN = [
     ("2.4", "no flow sensor, so no flow rate", "docs/MERMER-GECIS.md:37"),
     ("L/dk · kilit açık", "no flow interlock exists", "docs/MERMER-GECIS.md:38"),
     # invented program files
-    ("kapak_plakasi_v3.ngc", "no .ngc files in the repo", "repo has none"),
+    ("kapak_plakasi_v3.ngc", "invented file name; the program directory is not read yet", "repo has none"),
     ("4 812", "invented line count", "repo has none"),
     ("18 dk", "invented run time", "repo has none"),
     # probe as a tool
@@ -80,7 +80,10 @@ class TestCorrectValuesPresent(unittest.TestCase):
         cls.markup = all_html("test-rig")
 
     def test_real_scales_present(self):
-        for value in ("833.300", "823.500", "1250.000"):
+        """The INI's SCALE values, as configmodel formats them."""
+        ini = ini_raw_values()
+        for joint in (0, 1, 2):
+            value = "{:.3f} adım/mm".format(float(ini["JOINT_{}.SCALE".format(joint)]))
             with self.subTest(value=value):
                 self.assertIn(value, self.markup)
 

@@ -8,9 +8,9 @@
 2. **Uzaktan erişim:** Mac'ten SSH ile makinede komut çalıştırmak, kodu USB'siz
    göndermek, makinenin arayüzünü Mac'te görmek.
 
-Hedef: şimdi test tezgahının laptop'u (LinuxCNC 2.9.10 live USB, Debian 13 amd64),
-sonra Raspberry Pi 4 (arm64). Kod ikisinde de aynı; simülatör (`sim/`) Pi'nin
-mimarisinde çalışıyor.
+Hedef: şimdi test tezgahının live USB'si (LinuxCNC 2.9.10, Debian 13 amd64) — hangi PC'ye
+takılırsa (2026-08 bir Monster laptop, 2026-11-12 MSI anakartlı bir masaüstü PC) —, sonra
+Raspberry Pi 4 (arm64). Kod hepsinde aynı; simülatör (`sim/`) Pi'nin mimarisinde çalışıyor.
 
 ---
 
@@ -128,6 +128,33 @@ Kilitli **olmayanlar**: fiziksel erişim (USB bellek, SD kart, BIOS) ve güç an
    eklenir. O açılışta kiosk başlamaz.
 3. **Dosya** `/etc/bettercnc/kiosk-disabled`: varken kiosk başlamaz.
 
+### LinuxCNC açılmıyorsa: sahipsiz paylaşımlı bellek
+
+2026-11-12'de makinede görüldü: LinuxCNC TERM ile kapatıldıktan sonra bazen motion'ın SysV
+paylaşımlı bellek bölümünü sahipsiz bırakıyor — key `0x00000064` (`[EMCMOT]SHMEM_KEY`'in
+varsayılanı 100, `emcmotcfg.h:49`; test tezgahının INI'si başka değer vermiyor), `ipcs -m`'de
+`nattch` 0. Sonraki açılış düşüyor: axis "A configuration error is preventing LinuxCNC from
+starting" diyor (`s.joints` hiç gelmiyor, `axis.py:3554-3562`). Kiosk'un yeniden başlatma
+döngüsü de bu bölüm kaldıkça her denemede düşerdi. Bu yüzden kiosk'un başlatma döngüsü
+(`deploy/kiosk-session`) her LinuxCNC başlatmasından önce `deploy/kiosk.sh clean-shm`
+çalıştırır: hiçbir LinuxCNC süreci yoksa key `0x00000064`, `nattch` 0 bölümünü siler.
+Elle (axis'le çalışırken) aynı komut, LinuxCNC'yi başlatan kullanıcıyla sudo'suz
+(bölüm o kullanıcınındır, `uspace_common.h:103-119`):
+
+```bash
+deploy/kiosk.sh clean-shm
+```
+
+ya da adım adım:
+
+```bash
+ipcs -m                                      # key 0x00000064, nattch 0 → sahipsiz
+pgrep -a 'rtapi_app|linuxcncsvr|milltask'    # hiçbir şey basmamalı
+sudo ipcrm -M 0x00000064
+```
+
+LinuxCNC çalışırken silmeyin: bölüm o zaman sahipsiz değildir.
+
 ---
 
 ## Kurulum sırası
@@ -160,6 +187,11 @@ Sonra Mac'te `deploy/machine.local` dosyasını oluşturun (git'e girmez):
 CNC_HOST=192.168.1.xx
 CNC_USER=user
 ```
+
+Ev ağındaki adres DHCP'den gelir ve değişebilir (2026-11-12: 192.168.1.104 → .107; USB Wi-Fi
+çubuğu da sık kopuyor, OPEN-QUESTIONS B11). Değişince `CNC_HOST`'u güncelleyin. Erişim noktası
+istemcilerin MAC adresini değiştirdiği için PC ARP tablosundan tanınamaz; makinenin adı
+`debian` — onu arayın (ad Mac'te çözülüyorsa `CNC_HOST=debian` de olur).
 
 ### 2. Mac'ten
 
@@ -202,8 +234,20 @@ Makinedeki arayüzü SSH tüneliyle Mac'te http://localhost:8781/ adresinde aça
 sudo deploy/kiosk.sh board-network
 ```
 
-Kartın adresini kalıcı yapar (`enp3s0`, 10.10.10.1/24). Kartın bağlantısı hiçbir
-zaman varsayılan rota olmaz, yani interneti kesmez.
+Kartın adresini kalıcı yapar (10.10.10.1/24), **hangi PC olursa olsun.** Live USB PC'den PC'ye
+gidiyor ve her PC Ethernet portuna başka ad veriyor (ağustostaki laptop `enp3s0`, 2026-11-12'deki
+PC `enp12s0`). Bu yüzden profil (`bettercnc-board`) bir ada bağlı değil: kablolu her portta geçerli
+(USB adaptörleri, `enx…`, hariç) ve öncelikli. Yani **Ethernet portu kartındır**; kartın kablosu
+takılınca profil kendiliğinden devreye girer. Ev ağı ve SSH Wi-Fi'dan gelir. Kabloyla internet
+gerekirse ağ menüsünden "Wired connection"ı seçin (ya da `nmcli connection up "Wired connection 1"`).
+Tek portlu, Wi-Fi'ı çalışmayan bir PC'de kart takılıyken Mac'ten SSH olmaz: ev ağı için bir USB
+Wi-Fi çubuğu ya da USB Ethernet adaptörü gerekir (kart PC'nin kendi portunda kalır: `hm2_eth(9)`
+USB arkasındaki ağ kartlarını uygun saymaz).
+
+Komut açık bir bağlantıyı kesmez: SSH o porttan geliyorsa profili kurar ama açmaz, kart kablosu
+takılınca açılır. Kablosu takılı ve boşta tek bir port varsa onu hemen açar. Birden çok Ethernet
+portu olan PC'de `--iface <port>` profili o porta bağlar ve hemen açar (o porttan SSH geliyorsa
+bağlantı kopar). Kartın bağlantısı hiçbir zaman varsayılan rota olmaz, yani interneti kesmez.
 
 ```bash
 sudo deploy/kiosk.sh install
@@ -224,19 +268,30 @@ sudo deploy/kiosk.sh enable
 Bir sonraki açılıştan itibaren kiosk çalışır; hemen geçmek için `--now`. Geri almak
 için `disable`; bu, kiosktan önceki masaüstünü geri açar.
 
-### Güç verilince gerçekten açılması için (laptop)
+### Güç verilince gerçekten açılması için (live USB'li PC)
 
 - BIOS'ta açılış sırası: USB önce.
 - Live USB'nin GRUB menüsünde **varsayılan** satır persistence'lı olmalı ve kısa
   bir zaman aşımı olmalı. Persistence'sız açılırsa kurduğumuz hiçbir şey yoktur.
   `deploy/machine.sh info` → "açılış" satırında `persistence` görünmeli.
+- **2026-11-12'deki MSI PC, binadaki elektrik kesintisinden beri yalnız GRUB'un failsafe
+  satırıyla kullanılabilir açılıyor** (`noapic noapm nodma nomce nosmp nosplash vga=788`,
+  tek CPU). Normal satırda masaüstü arka planından sonra ekran kararıyor; persistence
+  (`/dev/sda2`, ext3) temiz; monitör AMD iGPU'da (HDMI), PC'de ayrıca bir NVIDIA GA102 var
+  (OPEN-QUESTIONS B10). Sebep bulunana kadar kiosk ancak failsafe satırı varsayılan ve
+  persistence'lı olursa güç verilince açılır — yukarıdaki `info` kontrolü onda da geçmeli.
+- Gecikme: failsafe'te servo-thread `tmax` ~0,52 ms, paket hatası 0 (önceki normal açılışta,
+  çok çekirdekte 3,4 ms). Ama tek çekirdekte Firefox açmak `tmax`'ı 1,25 ms'ye çıkardı — servo
+  periyodu 1 ms. Kiosk'un Chromium'u aynı tek çekirdeği paylaşacak: `enable`'dan önce makinede
+  ölçülmeli (`servo-thread.tmax`).
 - Pi 4'te bu sorunlar yok: SD karttan doğrudan açılır.
 
 ---
 
 ## Test tezgahında ne zaman açılmalı
 
-**Faz 1–9 (PLAN-BUGUN) bitmeden açmayın.** Kiosk axis'in yerini alır. Fazlarda
+**Faz 1–9 (PLAN-BUGUN) bitmeden açmayın.** (2026-11-12: Faz 1–8 geçti; bekleyenler Faz 9,
+aşağıdaki iki eksik ve PC'nin normal açılışı, OPEN-QUESTIONS B10.) Kiosk axis'in yerini alır. Fazlarda
 axis'in kullanılan özellikleri bizim arayüzde henüz yok:
 
 - Faz 6.2: eksenleri tek tek home'lama (bizde yalnız "Tümünü referansla" var).

@@ -41,8 +41,9 @@ Başlangıç satırı hangi adaptörün **gerçekten** kurulduğuna bakarak yaz�
 (`app.adapter_banner`): `mock adapter — makineye bağlı DEĞİL` ya da
 `LinuxCncAdapter — komutlar LinuxCNC'ye GİDİYOR`.
 
-`LinuxCncAdapter` makinede **hiç çalışmadı**, ama 2026-10-19'dan beri gerçek bir
-LinuxCNC 2.9.9'a karşı simülatörde çalışıyor ([sim/](../sim/README.md): Mac'te
+`LinuxCncAdapter` makinede yalnız 2026-11-12'de, AXIS'in yanında salt izleme olarak
+(depo dışı bir izleyiciyle) çalıştı; komutları makineyi hiç sürmedi. 2026-10-19'dan
+beri gerçek bir LinuxCNC 2.9.9'a karşı simülatörde çalışıyor ([sim/](../sim/README.md): Mac'te
 Docker, arm64). docs/11'deki ilk-oturum kontrol listesinin hepsi orada geçti. Kart,
 gerçek zamanlama ve motorlar simülatörde yok: zamanlama değerleri ve sınırları
 (0.25 s bekleme sınırı, 3 × `[EMCIO]CYCLE_TIME` estop sıfırlama süresi, hata
@@ -55,10 +56,23 @@ kullanıcıyla (aynı `HOME`) başlatılmalı. Değilse Türkçe bir mesajla 1 k
 LinuxCNC'nin Python modülü takım tablosunu `$HOME/.tool.mmap`'te arar, ilk poll'da
 bulamazsa o süreç bir daha durum okuyamaz (docs/11, "Found in `sim/`").
 
-Makinede bilinmesi gereken bir yan etki: bağlantı pinlerini okumak için UI pinsiz
-bir HAL bileşeni (`bettercnc-ui-<pid>`) açar. LinuxCNC kapanırken
-`halcmd unload all` bu sürece SIGTERM gönderir ve UI de kapanır; LinuxCNC'den
-sonra yeniden başlatın.
+Makinede bilinmesi gereken bir yan etki: bağlantı pinlerini, switch girişlerini ve
+step zamanlamasını okumak için UI pinsiz bir HAL bileşeni (`bettercnc-ui-<pid>`)
+açar. LinuxCNC kapanırken `halcmd unload all` bu sürece SIGTERM gönderir ve UI de
+kapanır; LinuxCNC'den sonra yeniden başlatın.
+
+Makineyi AXIS kullanırken arayüz yanında yalnız izleme için açılır (`--observe`;
+`FILE`, LinuxCNC'nin başlatıldığı INI):
+
+```bash
+PYTHONPATH=ui python3 -m bettercnc.app --adapter linuxcnc --observe --ini FILE
+```
+
+Bu modda hata kanalı açılmaz (LinuxCNC'nin mesajları AXIS'te kalır), ekrandan
+yalnız yazılım acil stop'u gider, diğer düğmeler kapalıdır ve her ekran salt
+izleme olduğunu söyler; kart bağlantısı koparsa giden acil stop bilerek kalır.
+Başlangıç satırına `SALT İZLEME` eklenir. Yalnız sahte LinuxCNC'yle test edildi,
+makinede AXIS'in yanında henüz denenmedi (docs/OPEN-QUESTIONS.md B12).
 
 ## Test
 
@@ -68,9 +82,9 @@ make test-v          # ayrıntılı
 make coverage        # satır kapsaması (stdlib, `coverage` paketi gerekmiyor)
 ```
 
-845 test (49'u `scripts/test_grbl2ini.py`), hepsi geçiyor, beklenen başarısızlık
-yok. Kapsama **%99.5**; `adapter.py` %99.0, `mdi.py` %100. `make coverage` paketteki
-modülleri dizinden bulur, yeni bir modül listeden düşemez.
+927 test (2026-11-13; 49'u `scripts/test_grbl2ini.py`), hepsi geçiyor, beklenen
+başarısızlık yok. Kapsama **%99.5**; `adapter.py` %99.0, `mdi.py` %100. `make coverage`
+paketteki modülleri dizinden bulur, yeni bir modül listeden düşemez.
 
 `reference/` (gitignore'daki LinuxCNC 2.9 klonu) varsa 21 doğruluk testi sahteyi
 ve kodun dayandığı LinuxCNC olgularını kaynakla karşılaştırır (içerikle; atıflardaki
@@ -125,13 +139,15 @@ yeteneği beyan etmeyi unutan profil `validate_profile`'da **hata verir** —
 sessizce kaybolmaz. (`docs/MERMER-GECIS.md:43-45`)
 
 **2. Ölçülmemiş sayı gösterilmez.**
-INI'de strok değerleri var (LinuxCNC'nin bir şeye ihtiyacı var) ama geçici
-olarak işaretli (`# ASSUMPTION:`, `PROVISIONAL`) — `[JOINT_n]` limitleri de,
-`[AXIS_*]` limitleri de; UI bugün yalnızca `[JOINT_n]` limitlerini okuyor.
-`iniload` bu işareti okuyor, UI "ölçülmedi" yazıyor. Strok ölçülüp işaret
-kelimeleri (`ASSUMPTION:`, `PROVISIONAL`, `MUST BE MEASURED`) silindiğinde UI
-**kod değişikliği olmadan** sayıları göstermeye başlar; `soft_limits` yeteneği,
-KORUMA YOK uyarısı ve Z alt ucu metni de INI'yi izler.
+INI bir değeri tahmin diye işaretlerse (`# ASSUMPTION:`, `PROVISIONAL`,
+`MUST BE MEASURED`) `iniload` bu işareti okur, UI sayı yerine "ölçülmedi" yazar;
+işaret kelimeleri silinince UI **kod değişikliği olmadan** sayıları göstermeye
+başlar. `soft_limits` yeteneği, KORUMA YOK uyarısı ve Z alt ucu metni de INI'yi
+izler. Örnek, artık tarihçe: test-rig.ini'de strok 2026-11-12'ye kadar geçici
+işaretliydi (LinuxCNC'nin bir sayıya ihtiyacı var) — `[JOINT_n]` limitleri de,
+`[AXIS_*]` limitleri de; UI yalnızca `[JOINT_n]` limitlerini okuyor. Faz 4'te
+ölçüldü, işaretler kalktı ve UI 3–399 / 3–387 / −96,5–−3 mm'yi kod değişikliği
+olmadan gösteriyor.
 
 Aynı kural LinuxCNC'den okunamayan durum için de geçerli: `LinuxCncAdapter`
 LinuxCNC'nin durumunu okuyamazsa başlık **DURUM BİLİNMİYOR** der, DRO ve WCS `—`

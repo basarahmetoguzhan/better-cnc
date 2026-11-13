@@ -1,8 +1,13 @@
 """Unmeasured values must render as unmeasured, and no default may leak.
 
-Two things were never measured: axis travel and realtime latency. The INI does
-contain travel numbers - LinuxCNC needs something - but they are marked
-ASSUMPTION, so the UI must not present them as facts.
+Realtime latency was never measured. Axis travel was, on 2026-11-12 (Faz 4):
+test-rig.ini lost its ASSUMPTION markers and the screens show its limits.
+
+The unmeasured path stays guarded for the next INI (the marble machine has
+none yet). LinuxCNC needs travel numbers, so an INI holds them before anyone
+has measured; they are marked ASSUMPTION, and the UI must not present them as
+facts. Those tests run on test-rig.ini with the markers put back
+(helpers.provisional_travel).
 """
 
 from __future__ import annotations
@@ -10,16 +15,113 @@ from __future__ import annotations
 import re
 import unittest
 
-from helpers import ALL_SCREENS, all_html, html, ini_raw_values, session, view
+from helpers import (
+    ALL_SCREENS,
+    all_html,
+    html,
+    ini_raw_values,
+    provisional_travel,
+    rig_profile,
+    session,
+    view,
+)
 
 from bettercnc.configmodel import UNMEASURED, TravelSpec, load_machine_config
 from bettercnc.iniload import load_ini, parse_ini_text
 from bettercnc.profiles import load_profile
 
+#: What the screens said about the travel while it was unmeasured
+#: (configmodel, profiles, viewmodel, the mock's alarm log).
+UNMEASURED_TRAVEL_TEXTS = (
+    "Yumuşak limitler tanımsız",
+    "KORUMA YOK",
+    "strok ölçülmedi",
+    "Strok ölçülmedi",
+    "Strok ÖLÇÜLMEDİ",
+)
 
-class TestTravelIsUnmeasured(unittest.TestCase):
+
+def _provisional_rig(test: unittest.TestCase):
+    """The test-rig profile on test-rig.ini with its travel marked ASSUMPTION.
+
+    Premise checked here: the copy differs in comment lines only, so every
+    key reads the same with helpers' independent parser."""
+    profile = rig_profile(test, transform=provisional_travel)
+    test.assertEqual(ini_raw_values(profile.ini_path), ini_raw_values())
+    return profile
+
+
+class TestTravelIsMeasured(unittest.TestCase):
+    """test-rig.ini as it is: travel measured in Faz 4, no marker left."""
+
     def setUp(self):
-        self.cfg = load_machine_config(load_profile("test-rig"))
+        self.profile = load_profile("test-rig")
+        self.cfg = load_machine_config(self.profile)
+        self.ini = ini_raw_values()
+
+    def test_no_value_in_the_ini_is_marked_provisional(self):
+        ini = load_ini(self.cfg.ini_path)
+        marked = [
+            (sec, key) for sec in ini.sections() for key in ini.keys(sec)
+            if ini.require(sec, key).provisional
+        ]
+        self.assertEqual(marked, [])
+
+    def test_every_axis_shows_the_ini_limits(self):
+        """Compared with helpers' own parser, not the loader."""
+        self.assertEqual([a.axis for a in self.cfg.axes], ["X", "Y", "Z"])
+        for a in self.cfg.axes:
+            with self.subTest(axis=a.axis):
+                lo = float(self.ini["JOINT_{}.MIN_LIMIT".format(a.joint)])
+                hi = float(self.ini["JOINT_{}.MAX_LIMIT".format(a.joint)])
+                self.assertTrue(a.travel.measured)
+                self.assertEqual((a.travel.min_limit, a.travel.max_limit), (lo, hi))
+                self.assertEqual(a.travel.display, "{:g} – {:g} mm".format(lo, hi))
+                self.assertTrue(a.travel.has_crash_protection)
+                self.assertEqual(a.travel.note, "")
+        self.assertTrue(self.cfg.soft_limits_configured)
+        self.assertTrue(self.profile.travel_measured)
+
+    def test_travel_cells_are_tagged_measured_on_both_screens(self):
+        for screen in ("kontrol", "makine"):
+            with self.subTest(screen=screen):
+                markup = html("test-rig", screen)
+                self.assertEqual(markup.count('data-travel-measured="1"'), len(self.cfg.axes))
+                self.assertNotIn('data-travel-measured="0"', markup)
+                for a in self.cfg.axes:
+                    self.assertIn(a.travel.display, markup)
+
+    def test_no_screen_calls_the_travel_unmeasured(self):
+        """Seen beside AXIS on the machine (2026-11-12, docs/11): while the
+        markers were still in the INI the screens said "ölçülmedi" and
+        "Yumuşak limitler tanımsız" for limits motion was enforcing."""
+        markup = all_html("test-rig")
+        for text in UNMEASURED_TRAVEL_TEXTS:
+            with self.subTest(text=text):
+                self.assertNotIn(text, markup)
+
+
+class TestReadyGateHasNoStaleWarnings(unittest.TestCase):
+    """Seen on the machine (2026-11-12): homed, the gate said "Program
+    başlatılabilir" next to "Yumuşak limitler tanımsız" - and next to the Y
+    DIR fault, solved in Faz 1 but still listed as active."""
+
+    def test_homed_and_enabled_the_gate_contradicts_nothing(self):
+        _, _, adapter = session("test-rig")
+        adapter.software_estop_reset()
+        adapter.home_all()
+        gate = view("test-rig", "kontrol", adapter)["kontrol"]["gate"]
+        self.assertEqual(gate["blocks"], [])  # premise: the startable state
+        self.assertIn("Program başlatılabilir.", html("test-rig", "kontrol", adapter))
+        for warning in gate["warnings"]:
+            with self.subTest(warning=warning[:40]):
+                for text in UNMEASURED_TRAVEL_TEXTS + ("aktif arıza", "yön değişmiyor"):
+                    self.assertNotIn(text, warning)
+
+
+class TestProvisionalTravelIsUnmeasured(unittest.TestCase):
+    def setUp(self):
+        self.cfg = load_machine_config(_provisional_rig(self))
         self.ini = ini_raw_values()
 
     def test_every_axis_travel_is_flagged_unmeasured(self):
@@ -33,8 +135,9 @@ class TestTravelIsUnmeasured(unittest.TestCase):
                 self.assertEqual(a.travel.display, UNMEASURED)
 
     def test_travel_display_does_not_contain_the_provisional_numbers(self):
-        """The specific leak this guards: the INI says MAX_LIMIT = 150.0, and
-        that number must not reach the operator dressed as a measurement."""
+        """The specific leak this guards: the INI has a MAX_LIMIT, and while
+        it is marked that number must not reach the operator dressed as a
+        measurement."""
         for a in self.cfg.axes:
             with self.subTest(axis=a.axis):
                 for value in (a.travel.min_limit, a.travel.max_limit):
@@ -68,7 +171,7 @@ class TestTravelIsUnmeasured(unittest.TestCase):
                     )
 
     def test_scale_is_not_marked_provisional(self):
-        """Guard against the marker over-reaching: SCALE was calibrated."""
+        """Guard against the marker over-reaching: SCALE was measured (Faz 3)."""
         ini = load_ini(self.cfg.ini_path)
         for joint in (0, 1, 2):
             with self.subTest(joint=joint):
@@ -84,19 +187,30 @@ class TestTravelIsUnmeasured(unittest.TestCase):
 
 
 class TestTravelMarkup(unittest.TestCase):
+    """The provisional copy on screen (TestTravelIsMeasured has the real INI)."""
+
+    def setUp(self):
+        self.profile = _provisional_rig(self)
+
     def test_travel_renders_the_unmeasured_word(self):
+        """In the travel cell itself: the gate's latency warning says
+        "ölçülmedi" on every machine."""
         for screen in ("kontrol", "makine"):
             with self.subTest(screen=screen):
-                self.assertIn(UNMEASURED, html("test-rig", screen))
+                self.assertIn(
+                    'data-travel-measured="0">{}</span>'.format(UNMEASURED),
+                    html(self.profile, screen),
+                )
 
     def test_travel_cells_are_tagged_unmeasured(self):
-        markup = html("test-rig", "makine")
+        markup = html(self.profile, "makine")
         self.assertIn('data-travel-measured="0"', markup)
         self.assertNotIn('data-travel-measured="1"', markup)
 
     def test_provisional_limits_never_appear_anywhere(self):
-        """Across every screen. 150.0 / -50.0 are the INI placeholders."""
-        markup = all_html("test-rig")
+        """Across every screen: neither the INI's raw text nor the travel as
+        TravelSpec.display would write it."""
+        markup = all_html(self.profile)
         ini = ini_raw_values()
         for key in (
             "JOINT_0.MAX_LIMIT", "JOINT_1.MAX_LIMIT", "JOINT_2.MIN_LIMIT",
@@ -104,20 +218,26 @@ class TestTravelMarkup(unittest.TestCase):
             raw = ini[key]
             with self.subTest(key=key, value=raw):
                 self.assertNotIn(raw, markup)
+        for joint in (0, 1, 2):
+            lo = float(ini["JOINT_{}.MIN_LIMIT".format(joint)])
+            hi = float(ini["JOINT_{}.MAX_LIMIT".format(joint)])
+            with self.subTest(joint=joint):
+                self.assertNotIn("{:g} – {:g} mm".format(lo, hi), markup)
 
     def test_prototype_travel_strings_absent(self):
-        markup = all_html("test-rig")
-        for wrong in ("0 – 300 mm", "0 – 180 mm", "−45 – 0 mm", "0 – 150 mm"):
-            with self.subTest(value=wrong):
-                self.assertNotIn(wrong, markup)
+        for profile in ("test-rig", self.profile):
+            markup = all_html(profile)
+            for wrong in ("0 – 300 mm", "0 – 180 mm", "−45 – 0 mm", "0 – 150 mm"):
+                with self.subTest(value=wrong, ini=getattr(profile, "ini_path", profile)):
+                    self.assertNotIn(wrong, markup)
 
     def test_soft_limits_warning_is_shown(self):
-        markup = html("test-rig", "makine")
+        markup = html(self.profile, "makine")
         self.assertIn("Yumuşak limitler tanımsız", markup)
         self.assertIn("KORUMA YOK", markup)
 
     def test_soft_limits_warning_also_in_the_gate(self):
-        vm = view("test-rig", "kontrol")
+        vm = view(self.profile, "kontrol")
         self.assertTrue(
             any("Yumuşak limitler tanımsız" in w for w in vm["kontrol"]["gate"]["warnings"])
         )
@@ -242,6 +362,16 @@ class TestOtherAbsentData(unittest.TestCase):
         vm = view("test-rig", "program")
         self.assertEqual(vm["program"]["files"], [])
         self.assertTrue(vm["program"]["files_empty_reason"].strip())
+
+    def test_empty_reason_stays_true_with_programs_in_the_repo(self):
+        """The reason says why the list is empty (the program directory is not
+        read) and names the INI's PROGRAM_PREFIX. It may not call the repo
+        empty: nc_files/faz8-kare.ngc sits in that directory since Faz 8."""
+        reason = view("test-rig", "program")["program"]["files_empty_reason"]
+        self.assertIn("okunmuyor", reason)
+        self.assertNotIn(".ngc dosyası yok", reason)
+        prefix = ini_raw_values()["DISPLAY.PROGRAM_PREFIX"]
+        self.assertIn("PROGRAM_PREFIX = {} (test-rig.ini)".format(prefix), reason)
 
     def test_prototype_filenames_absent(self):
         markup = all_html("test-rig")

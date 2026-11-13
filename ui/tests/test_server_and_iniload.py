@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from helpers import ALL_SCREENS
+from helpers import ALL_SCREENS, ini_raw_values
 
 from bettercnc import render as R
 from bettercnc import viewmodel as VM
@@ -431,7 +431,8 @@ class TestHttpRoutes(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(payload["screen"], "makine")
-        self.assertIn("833.300", payload["html"])
+        # X's SCALE, as the INI has it (the Makine axis rows render it)
+        self.assertIn(ini_raw_values()["JOINT_0.SCALE"], payload["html"])
 
     def test_api_render_rejects_an_unknown_screen(self):
         _, body = self.get("/api/render?screen=../../etc/passwd")

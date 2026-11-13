@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1230,6 +1231,340 @@ class TestKioskRulesInTheScripts(unittest.TestCase):
 
     def test_board_link_never_takes_the_default_route(self):
         self.assertIn("ipv4.never-default yes", read("deploy/kiosk.sh"))
+
+
+# ---------------------------------------------------------------------------
+# kiosk.sh board-network: the board's address on whatever PC the live USB is in
+# ---------------------------------------------------------------------------
+
+# Stand-ins that log their arguments (one line per call, \x1f between
+# arguments) and answer what board-network asks.
+_FAKE_NMCLI = r"""#!/bin/bash
+{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; } >> "$FAKE/nmcli.log"
+if [ "$*" = "-t -f DEVICE,TYPE,STATE device" ]; then
+  printf '%s' "${LC_ALL:-}" > "$FAKE/lc_all"
+  cat "$FAKE/devices"
+fi
+exit 0
+"""
+_FAKE_IP = r"""#!/bin/bash
+if [ "$1" = link ] && [ "$2" = show ]; then grep -qxF "$3" "$FAKE/links"; exit $?; fi
+exit 0
+"""
+_FAKE_ID = """#!/bin/sh
+echo "$FAKE_UID"
+"""
+_FAKE_SYSTEMCTL = """#!/bin/sh
+[ -n "${FAKE_NM_DOWN:-}" ] && exit 3
+exit 0
+"""
+
+
+class TestBoardNetwork(unittest.TestCase):
+    """The live USB moves between PCs and each names its wired port its own
+    way: the August laptop enp3s0, the 2026-11-12 PC enp12s0. board-network
+    used to bind the board's profile to enp3s0. Run here with stand-ins for
+    id, systemctl, ip and nmcli; the nmcli lines themselves were run against
+    a real NetworkManager 1.52 (Debian 13) on 2026-11-12."""
+
+    @classmethod
+    def setUpClass(cls):
+        # One set of stand-ins for the whole class: macOS checks every new
+        # executable on its first run, which made a fresh set per call ~0.6 s.
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.fake = cls._tmp.name
+        for name, body in (("nmcli", _FAKE_NMCLI), ("ip", _FAKE_IP),
+                           ("id", _FAKE_ID), ("systemctl", _FAKE_SYSTEMCTL)):
+            path = os.path.join(cls.fake, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.chmod(path, 0o755)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def run_board_network(self, *args, devices="", links=("enp12s0",), uid="0", nm_down=False):
+        fake = self.fake
+        for stale in ("nmcli.log", "lc_all"):
+            if os.path.exists(os.path.join(fake, stale)):
+                os.remove(os.path.join(fake, stale))
+        with open(os.path.join(fake, "devices"), "w", encoding="utf-8") as fh:
+            fh.write(devices)
+        with open(os.path.join(fake, "links"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(links) + "\n")
+        env = {"PATH": fake + os.pathsep + "/usr/bin:/bin", "FAKE": fake, "FAKE_UID": uid}
+        if nm_down:
+            env["FAKE_NM_DOWN"] = "1"
+        out = subprocess.run(["bash", os.path.join(DEPLOY, "kiosk.sh"), "board-network", *args],
+                             capture_output=True, encoding="utf-8", errors="replace",
+                             env=env, timeout=30)
+        calls = []
+        if os.path.exists(os.path.join(fake, "nmcli.log")):
+            with open(os.path.join(fake, "nmcli.log"), encoding="utf-8") as fh:
+                calls = [line.rstrip("\n").split("\x1f")[:-1] for line in fh]
+        lc_all = None
+        if os.path.exists(os.path.join(fake, "lc_all")):
+            with open(os.path.join(fake, "lc_all"), encoding="utf-8") as fh:
+                lc_all = fh.read()
+        return out, calls, lc_all
+
+    @staticmethod
+    def added(calls):
+        return next(c for c in calls if c[:2] == ["connection", "add"])
+
+    @staticmethod
+    def ups(calls):
+        return [c for c in calls if c[:2] == ["connection", "up"]]
+
+    def test_on_any_pc_the_profile_names_no_port(self):
+        out, calls, _ = self.run_board_network(
+            devices="enp12s0:ethernet:connected\nwlx788cb5b85934:wifi:connected\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        add = self.added(calls)
+        self.assertEqual(add[add.index("ifname") + 1], "*")
+        # wired ports only, never a USB adapter (udev names those enx<MAC>)
+        self.assertEqual(add[add.index("match.interface-name") + 1], "en* eth* !enx*")
+        start = add.index("ipv4.method")
+        settings = dict(zip(add[start::2], add[start + 1::2]))
+        self.assertEqual(settings["ipv4.method"], "manual")
+        self.assertEqual(settings["ipv4.addresses"], "10.10.10.1/24")
+        self.assertEqual(settings["ipv4.never-default"], "yes")
+        self.assertEqual(settings["ipv6.method"], "disabled")
+        self.assertEqual(settings["connection.autoconnect"], "yes")
+        # above a profile's default (0): a plugged-in board gets this one
+        self.assertGreater(int(settings["connection.autoconnect-priority"]), 0)
+        # the old profile goes first: a second run replaces it, never adds a twin
+        self.assertLess(calls.index(["connection", "delete", "bettercnc-board"]), calls.index(add))
+
+    def test_a_port_in_use_is_never_taken_over(self):
+        """2026-11-12: the PC's only port carried the SSH session the command
+        would have run in; bringing the profile up there cuts it."""
+        for state in ("connected", "connecting (getting IP configuration)"):
+            with self.subTest(state=state):
+                out, calls, _ = self.run_board_network(devices="enp12s0:ethernet:%s\n" % state)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(self.ups(calls), [])
+                self.assertIn("kendiliğinden devreye girer", out.stdout)
+                self.assertIn("Wired connection", out.stdout)
+
+    def test_the_one_free_port_with_a_cable_gets_it_now(self):
+        out, calls, lc_all = self.run_board_network(
+            devices="lo:loopback:unmanaged\nenp3s0:ethernet:disconnected\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.ups(calls), [["connection", "up", "bettercnc-board", "ifname", "enp3s0"]])
+        self.assertEqual(lc_all, "C")   # the state words are compared in English
+
+    def test_usb_adapters_unplugged_ports_and_wifi_are_not_the_board(self):
+        not_the_board = ("enx001122334455:ethernet:disconnected",   # USB adapter
+                         "enp3s0:ethernet:unavailable",            # no cable in
+                         "wlp2s0:wifi:disconnected")
+        for device in not_the_board:
+            with self.subTest(alone=device):
+                out, calls, _ = self.run_board_network(devices=device + "\n")
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(self.ups(calls), [])
+            with self.subTest(next_to_the_port=device):
+                out, calls, _ = self.run_board_network(
+                    devices=device + "\nenp12s0:ethernet:disconnected\n")
+                self.assertEqual(self.ups(calls),
+                                 [["connection", "up", "bettercnc-board", "ifname", "enp12s0"]])
+
+    def test_two_free_ports_wait_and_name_the_way_to_choose(self):
+        out, calls, _ = self.run_board_network(
+            devices="enp3s0:ethernet:disconnected\neno1:ethernet:disconnected\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.ups(calls), [])
+        self.assertIn("enp3s0 eno1", out.stdout)
+        self.assertIn("--iface", out.stdout)
+
+    def test_iface_binds_the_profile_to_that_port_and_brings_it_up(self):
+        out, calls, _ = self.run_board_network("--iface", "enp12s0", "--addr", "10.10.10.5/24")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        add = self.added(calls)
+        self.assertEqual(add[add.index("ifname") + 1], "enp12s0")
+        self.assertNotIn("match.interface-name", add)
+        self.assertEqual(add[add.index("ipv4.addresses") + 1], "10.10.10.5/24")
+        self.assertEqual(add[add.index("ipv4.never-default") + 1], "yes")
+        self.assertEqual(self.ups(calls), [["connection", "up", "bettercnc-board"]])
+        self.assertNotIn(["-t", "-f", "DEVICE,TYPE,STATE", "device"], calls)
+
+    def test_refusals_change_nothing(self):
+        cases = (
+            (("--iface", "yok0"), {}, "arayüz yok: yok0"),
+            (("--bogus",), {}, "bilinmeyen seçenek: --bogus"),
+            (("--iface",), {}, "--iface bir değer ister"),
+            ((), {"uid": "1000"}, "sudo ile çalıştırın"),
+            ((), {"nm_down": True}, "ip addr add 10.10.10.1/24 dev <kartın takılı olduğu port>"),
+        )
+        for args, kw, message in cases:
+            with self.subTest(args=args, **kw):
+                out, calls, _ = self.run_board_network(*args, **kw)
+                self.assertEqual(out.returncode, 1)
+                self.assertIn(message, out.stderr)
+                self.assertEqual([c for c in calls if c[:2] in (["connection", "add"], ["connection", "up"])], [])
+
+    def test_the_match_and_the_port_filter_agree(self):
+        """BOARD_MATCH says which ports NetworkManager may give the profile;
+        board_port() which port it is brought up on at once. One rule."""
+        kiosk = read("deploy/kiosk.sh")
+        self.assertIn("BOARD_MATCH='en* eth* !enx*'", kiosk)
+        self.assertRegex(kiosk, r"enx\*\) return 1 ;;\s*en\*\|eth\*\) return 0 ;;")
+
+
+# ---------------------------------------------------------------------------
+# kiosk.sh clean-shm: the motion shared memory a TERM shutdown leaves behind
+# ---------------------------------------------------------------------------
+
+# Stand-ins in TestBoardNetwork's style: each logs its arguments (one line per
+# call, \x1f between arguments) and answers from files the test writes.
+_FAKE_PGREP = r"""#!/bin/bash
+{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; } >> "$FAKE/pgrep.log"
+code="$(cat "$FAKE/pgrep_code")"
+if [ "$code" = 0 ]; then cat "$FAKE/pids"; fi
+exit "$code"
+"""
+_FAKE_IPCS = r"""#!/bin/bash
+{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; } >> "$FAKE/ipcs.log"
+printf '%s' "${LC_ALL:-}" > "$FAKE/ipcs_lc_all"
+cat "$FAKE/segments"
+"""
+_FAKE_IPCRM = r"""#!/bin/bash
+{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; } >> "$FAKE/ipcrm.log"
+exit "$(cat "$FAKE/ipcrm_code")"
+"""
+
+#: `ipcs -m` as util-linux prints it in the C locale.
+_IPCS_HEAD = (
+    "\n------ Shared Memory Segments --------\n"
+    "key        shmid      owner      perms      bytes      nattch     status      \n"
+)
+#: HAL's own segment (HAL_KEY, src/hal/hal_priv.h:120): never ours to remove.
+_HAL_SEGMENT = "0x48414c32 32768      user       600        262144     0                       \n"
+
+
+def _motion_segment(shmid: int, nattch: int) -> str:
+    return "0x00000064 {:<10} user       600        2297472    {:<10} {}\n".format(
+        shmid, nattch, "locked")
+
+
+class TestCleanShm(unittest.TestCase):
+    """2026-11-12 on the rig: after a TERM shutdown LinuxCNC sometimes left
+    its motion segment (SysV key 0x00000064) with nothing attached, and the
+    next start failed ("A configuration error is preventing LinuxCNC from
+    starting"). The kiosk's restart loop would have failed the same way on
+    every try. Run here with stand-ins for pgrep, ipcs and ipcrm."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.fake = cls._tmp.name
+        for name, body in (("pgrep", _FAKE_PGREP), ("ipcs", _FAKE_IPCS), ("ipcrm", _FAKE_IPCRM)):
+            path = os.path.join(cls.fake, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.chmod(path, 0o755)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def _write(self, name: str, text: str) -> None:
+        with open(os.path.join(self.fake, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _log(self, name: str):
+        path = os.path.join(self.fake, name)
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as fh:
+            return [line.rstrip("\n").split("\x1f")[:-1] for line in fh]
+
+    def run_clean_shm(self, segments="", pids="", pgrep_code=1, ipcrm_code=0):
+        for stale in ("pgrep.log", "ipcs.log", "ipcrm.log", "ipcs_lc_all"):
+            if os.path.exists(os.path.join(self.fake, stale)):
+                os.remove(os.path.join(self.fake, stale))
+        self._write("segments", _IPCS_HEAD + segments)
+        self._write("pids", pids)
+        self._write("pgrep_code", str(pgrep_code))
+        self._write("ipcrm_code", str(ipcrm_code))
+        # No id/systemctl stand-ins: clean-shm runs as the kiosk's user.
+        env = {"PATH": self.fake + os.pathsep + "/usr/bin:/bin", "FAKE": self.fake}
+        out = subprocess.run(["bash", os.path.join(DEPLOY, "kiosk.sh"), "clean-shm"],
+                             capture_output=True, encoding="utf-8", errors="replace",
+                             env=env, timeout=30)
+        return out, self._log("ipcrm.log")
+
+    def test_an_orphaned_motion_segment_is_removed(self):
+        out, removed = self.run_clean_shm(_HAL_SEGMENT + _motion_segment(32769, 0))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(removed, [["-m", "32769"]])   # by its id; HAL's untouched
+        self.assertIn("silindi", out.stdout)
+        self.assertEqual(self._log("pgrep.log"), [["-x", "linuxcnc|rtapi_app|milltask|linuxcncsvr"]])
+        self.assertEqual(self._log("ipcs.log"), [["-m"]])
+        with open(os.path.join(self.fake, "ipcs_lc_all"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "C")   # the columns are read in the C locale
+
+    def test_nothing_is_touched_while_linuxcnc_runs(self):
+        """pgrep found one: not even the segment table is read."""
+        out, removed = self.run_clean_shm(_motion_segment(32769, 0), pids="4242\n4243\n",
+                                          pgrep_code=0)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(removed, [])
+        self.assertEqual(self._log("ipcs.log"), [])
+        self.assertIn("LinuxCNC çalışıyor (pid 4242 4243)", out.stdout)
+
+    def test_a_pgrep_that_cannot_answer_touches_nothing(self):
+        """Exit 2 or 3 (bad pattern, fatal error) or 127 (no pgrep) is not
+        "no LinuxCNC process"."""
+        for code in (2, 3, 127):
+            with self.subTest(pgrep_exit=code):
+                out, removed = self.run_clean_shm(_motion_segment(32769, 0), pgrep_code=code)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(removed, [])
+                self.assertIn("bakılamadı", out.stderr)
+
+    def test_a_segment_with_something_attached_stays(self):
+        out, removed = self.run_clean_shm(_HAL_SEGMENT + _motion_segment(32769, 2))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(removed, [])
+        self.assertIn("kullanımda (2 bağlı)", out.stdout)
+
+    def test_no_motion_segment_nothing_to_do(self):
+        for segments in ("", _HAL_SEGMENT):
+            with self.subTest(segments=segments):
+                out, removed = self.run_clean_shm(segments)
+                self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
+                self.assertEqual(removed, [])
+
+    def test_a_removal_that_fails_says_how_to_do_it_by_hand(self):
+        out, removed = self.run_clean_shm(_motion_segment(65538, 0), ipcrm_code=1)
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(removed, [["-m", "65538"]])
+        self.assertIn("sudo ipcrm -m 65538", out.stderr)
+
+    def test_the_session_cleans_before_every_linuxcnc_start(self):
+        """In kiosk-session's restart loop, between the boot screen's
+        "starting" line and the linuxcnc command."""
+        session = read("deploy/kiosk-session")
+        loop = session.index("\nwhile true; do\n  n=$((n + 1))")
+        clean = session.index('"$DEPLOY_DIR/kiosk.sh" clean-shm')
+        start = session.index('env -u DISPLAY setsid linuxcnc "$KIOSK_INI"')
+        self.assertLess(loop, clean)
+        self.assertLess(session.index("Makinenin kontrol sistemi başlatılıyor", loop), clean)
+        self.assertLess(clean, start)
+        self.assertEqual(session.count("clean-shm"), 1)
+
+    def test_the_key_is_motions_default_and_the_rig_keeps_it(self):
+        """[EMCMOT]SHMEM_KEY unset: motion uses DEFAULT_SHMEM_KEY, 100
+        (reference/linuxcnc/src/emc/motion/emcmotcfg.h:49)."""
+        kiosk = read("deploy/kiosk.sh")
+        self.assertEqual(int(re.search(r"^LCNC_SHM_KEY=(0x[0-9a-f]{8})$", kiosk, re.M).group(1), 16), 100)
+        self.assertIsNone(re.search(r"^\s*SHMEM_KEY\s*=", rig_text(), re.M))
+        emcmotcfg = os.path.join(REPO_ROOT, "reference", "linuxcnc", "src", "emc", "motion", "emcmotcfg.h")
+        if os.path.exists(emcmotcfg):   # reference/ is optional (make reference)
+            with open(emcmotcfg, encoding="utf-8") as fh:
+                self.assertRegex(fh.read(), r"#define DEFAULT_SHMEM_KEY 100\b")
 
 
 # ---------------------------------------------------------------------------

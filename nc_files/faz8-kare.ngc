@@ -1,0 +1,14 @@
+( Faz 8.1 - havada kuru kosu: 50 mm kare, malzeme yok, Z ustte )
+( Test tezgahi: Z sifiri ust switch'te, izinli Z araligi -96.5 .. -3 )
+( makine koordinatinda. G54 ofsetleri sifir oldugu icin Z hareketleri )
+( G53 ile makine koordinatinda yazildi; X/Y G54'te = makine. )
+G21 G90 G94 G17
+G54
+G53 G0 Z-20        ( ust switch'in 20 mm alti, tablanin yaklasik 80 mm ustu )
+G0 X10 Y10         ( karenin baslangic kosesi )
+G1 X60 F300        ( 300 mm/dk = 5 mm/s )
+G1 Y60
+G1 X10
+G1 Y10             ( baslangic kosesine donus )
+G53 G0 Z-10
+M30

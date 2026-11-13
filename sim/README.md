@@ -23,13 +23,15 @@ değişince `make sim-stop && make sim` ile yeniden başlat.
 |---|---|
 | LinuxCNC 2.9.9 (linuxcnc.org deposu, imzası doğrulanmış) | Kart yok: `hm2_eth` yüklenmez |
 | Rig'in INI'si, birebir: `configs/test-rig/test-rig.ini` (yalnız `[HAL]HALFILE` ve `[DISPLAY]DISPLAY` değişir, `make_sim_ini.py`) | Step yok: `motor-pos-cmd` doğrudan `motor-pos-fb`'ye döner → **SCALE ve step zamanlaması denenmez** |
-| motmod, trivkins, homing, yumuşak limitler, estop_latch zinciri, task/io | Beş switch `sim_home_switch` ile; konumlar **uydurma**, rig'in stroku ölçülmedi |
+| motmod, trivkins, homing, yumuşak limitler, estop_latch zinciri, task/io | Beş switch `sim_home_switch` ile; konumlar rig'in 2026-11-12'de ölçülen strokundan (Faz 4): her max switch, rig'deki gibi `MAX_LIMIT`'in ~3,7 mm ötesinde |
 | Arayüz `--adapter linuxcnc` ile, gerçek NML ve HAL üzerinden | Bağlantı pinleri (`hm2_7i92.0.*`) `hm2_link_stub.py`'den: değerler okuma değil |
 | Python 3.13, Debian 13, arm64 | Gerçek zamanlı çekirdek yok → **gecikme/zamanlama ölçümü anlamsız** |
 
-Switch'ler HAL'de **PLAN-BUGUN Faz 5'teki planlı hâliyle** bağlı (X düzeltilmiş),
-rig'deki gibi yorum satırı değil; yoksa homing denenemezdi. Y'nin hangi ucunun
-minimum olduğu bilinmiyor (Y DIR arızası); simülatör Y'yi X gibi varsayar.
+Switch'ler rig'deki gibi bağlı (`configs/test-rig/test-rig.hal`, 2026-11-12'den beri,
+Faz 5): X'in minimumu sol (`gpio.021`), Y'ninki ön (`gpio.023`; Y+ = arka), Z'de yalnız
+üst switch var. Rig'de Y'nin ikinci motoru `stepgen.03`'te (AXIS 3); simülatörde step
+üreteci olmadığı için karşılığı yok. Ölçümler:
+`docs/board-dumps/rig-measurements-2026-11-12.json`.
 
 ## Arıza canlandırma
 

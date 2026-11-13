@@ -1,15 +1,18 @@
 """The real input map, the Z asymmetry, and link health.
 
-Input map is hand-verified in docs/DURUM.md:69-80. The prototype's was invented.
+Input map is hand-verified in docs/DURUM.md:69-80, and since Faz 5
+(2026-11-12) every switch is netted in configs/test-rig/test-rig.hal - which
+is where the expected ends below are read from. The prototype's was invented.
 Link health (packet loss + watchdog) was absent from the prototype entirely.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 
-from helpers import ALL_SCREENS, all_html, html, session, view
+from helpers import ALL_SCREENS, REPO_ROOT, all_html, html, ini_raw_values, session, view
 
 from bettercnc import render as R
 from bettercnc import viewmodel as VM
@@ -17,22 +20,54 @@ from bettercnc.capabilities import Capability
 from bettercnc.profiles import TEST_RIG_INPUTS, load_profile
 from bettercnc.state import LinkHealth, Severity
 
-#: docs/DURUM.md:73-80 (locations, hand-verified by triggering each switch) and
-#: docs/DURUM.md:82 (jog directions: X+ = right, Z+ = up, Y unknown). Y's ends are
-#: "" because its DIR fault hides which way is +; asserting "+"/"-" there would be
-#: presenting a guess as a measurement.
-EXPECTED_MAP = {
-    "gpio.020": ("X", "+"),   # X sağ
-    "gpio.021": ("X", "-"),   # X sol
-    "gpio.022": ("Y", ""),    # Y arka - + end unknown
-    "gpio.023": ("Y", ""),    # Y ön   - + end unknown
-    "gpio.024": ("Z", "+"),   # Z üst
-}
+TEST_RIG_HAL = os.path.join(REPO_ROOT, "configs", "test-rig", "test-rig.hal")
+
+
+def hal_switch_nets(path: str = TEST_RIG_HAL):
+    """{pin: (axis, end, hal_pin)} as test-rig.hal nets the switches.
+
+    A switch netted to joint.N.pos-lim-sw-in is that axis's "+" end, one netted
+    to neg-lim-sw-in its "-" end; joint N is the Nth letter of
+    [TRAJ]COORDINATES (trivkins). Faz 5 verified each net on the machine: every
+    switch pressed by hand tripped its joint's limit (docs/DURUM.md:135). Read
+    with this file's own parser, so the profile is checked against the config
+    LinuxCNC runs and not against a second copy of the map.
+    """
+    source: dict = {}
+    ends: dict = {}
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"\s*net\s+(\S+)\s+(hm2_\S+\.(gpio\.\d{3})\.in(?:_not)?)\s*$", line)
+            if m:
+                source[m.group(1)] = (m.group(3), m.group(2))
+                continue
+            m = re.match(r"\s*net\s+(\S+)\s+=>\s+joint\.(\d+)\.(pos|neg)-lim-sw-in\s*$", line)
+            if m:
+                end = "+" if m.group(3) == "pos" else "-"
+                ends.setdefault(m.group(1), []).append((int(m.group(2)), end))
+    letters = ini_raw_values()["TRAJ.COORDINATES"].split()
+    out = {}
+    for signal, limits in ends.items():
+        (joint, end), = limits  # one limit input per switch
+        pin, hal_pin = source[signal]
+        out[pin] = (letters[joint], end, hal_pin)
+    return out
+
+
+#: docs/DURUM.md:73-82: X+ = right, Y+ = rear (Faz 2), Z+ = up - so X right,
+#: Y rear and Z top are "+", X left and Y front "-". Until Faz 1 solved the Y
+#: DIR fault Y's direction was unknown and both Y ends were "", not guessed.
+EXPECTED_MAP = {pin: (axis, end) for pin, (axis, end, _) in hal_switch_nets().items()}
 
 
 class TestInputMap(unittest.TestCase):
     def setUp(self):
         self.profile = load_profile("test-rig")
+
+    def test_the_hal_nets_five_switches(self):
+        """Premise for the map: the parser found every net."""
+        self.assertEqual(len(EXPECTED_MAP), 5)
+        self.assertEqual(sorted(e for _, e in EXPECTED_MAP.values()), ["+", "+", "+", "-", "-"])
 
     def test_exactly_five_inputs(self):
         self.assertEqual(len(self.profile.inputs), 5)
@@ -49,13 +84,23 @@ class TestInputMap(unittest.TestCase):
                 self.assertEqual(inp.axis, axis)
                 self.assertEqual(inp.end, end)
 
-    def test_y_end_is_unknown_not_guessed(self):
-        """Regression guard: the map once said Y rear = "+", Y front = "-" while
-        docs/DURUM.md:82 says "Y = belirsiz". Unknown stays unknown until the Y
-        DIR fault is fixed and Y+ is jogged (docs/DURUM.md:127)."""
+    def test_each_input_names_the_pin_the_hal_nets(self):
+        """Polarity included: the HAL nets .in_not where the profile says the
+        input idles high."""
+        nets = hal_switch_nets()
+        for inp in self.profile.inputs:
+            with self.subTest(pin=inp.pin):
+                hal_pin = nets[inp.pin][2].replace("hm2_[HOSTMOT2](BOARD).0.", "hm2_7i92.0.")
+                self.assertEqual(inp.hal_pin, hal_pin)
+
+    def test_y_ends_follow_the_measured_direction(self):
+        """Y+ = rear since Faz 2 (docs/DURUM.md:82): the rear switch is the +
+        end, the front one - where Y homes - the - end. The map once said so
+        before anyone knew, and was reverted to "" until it was measured."""
+        ends = {inp.label: inp.end for inp in self.profile.inputs_for_axis("Y")}
+        self.assertEqual(ends, {"Y arka uç": "+", "Y ön uç": "-"})
         for inp in self.profile.inputs_for_axis("Y"):
             with self.subTest(pin=inp.pin):
-                self.assertEqual(inp.end, "")
                 self.assertIn("DURUM.md:", inp.source)
                 self.assertIn(":82", inp.source)
 
@@ -76,11 +121,15 @@ class TestInputMap(unittest.TestCase):
 class TestUnmeasuredClaimsStayHedged(unittest.TestCase):
     """Guards for the 2026-10-18 corrections: none of these may silently revert."""
 
-    def test_y_dir_fault_location_is_not_claimed(self):
-        """Where Y's DIR path fails (board terminal, cable or driver) has not been
-        measured (docs/DURUM.md:12), so no screen may call it a cable fault."""
-        self.assertNotIn("DIR kablosu", all_html("test-rig"))
-        self.assertIn("ölçülmedi", html("test-rig", "alarmlar"))
+    def test_y_dir_fault_is_not_shown_as_active(self):
+        """The Y DIR fault was never a cable: Y's two drivers hung on one 3.3 V
+        output (docs/DURUM.md:12, solved 2026-11-12). No screen may call it a
+        cable fault, nor still list it as active."""
+        markup = all_html("test-rig")
+        for stale in ("DIR kablosu", "DIR hattında aktif arıza", "DIR hattında arıza", "yön değişmiyor"):
+            with self.subTest(text=stale):
+                self.assertNotIn(stale, markup)
+        self.assertIn("stepgen.03", html("test-rig", "alarmlar"))
 
     def test_estop_requirement_keeps_the_encoder_front_end_caveat(self):
         """IO 25-33 are GPIO with num_encoders=0, but the circuit behind the

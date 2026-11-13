@@ -2,7 +2,7 @@
 # test-rig.hal - Phase 1.5 test machine: 3-axis DIY wooden-frame router
 # =============================================================================
 #
-#   *** RUNS AND JOGS (DURUM.md). OPEN: Y DIR, SCALE, TRAVEL, SWITCH NETS, HOMING ***
+#   *** 2026-11-12: Y DIR FIXED, SWITCH NETS CONNECTED, HOMING WORKS ***
 #
 # The board is now fully interrogated (2026-08-05). Every hm2_ pin name below is
 # built from [HOSTMOT2]BOARD = 7i92 in the INI, giving the prefix hm2_7i92.0,
@@ -13,16 +13,16 @@
 #   docs/board-dumps/printpd-10.10.10.10-2026-08-05.txt
 #   docs/10-7i92-pinout-verified.md   <- the readable pin map
 #
-# The SWITCH WIRING is mapped by hand (ends + polarity, docs/DURUM.md:69-82)
-# except Y's + end. Those nets stay commented out - see the switch section WARNING.
+# The SWITCH WIRING is mapped by hand (ends + polarity, docs/DURUM.md:69-82),
+# Y+ = rear since Faz 2; the nets are CONNECTED and were tested in Faz 5.
 #
-#   grep -n 'ASSUMPTION:' configs/test-rig/test-rig.hal
+#   grep -n 'ASSUMPTION[:]' configs/test-rig/test-rig.hal    # prints nothing
 #
-# Motors COUPLED; SCALE + Y unverified, no hw estop: jog slowly. Plan: PLAN-BUGUN.md
+# Motors COUPLED; soft limits act only once homed; no hw estop: hand on power.
 #
 # Structure follows the upstream sample
 #   reference/linuxcnc/configs/by_interface/mesa/hm2-stepper/hm2-stepper-eth.hal
-# which is the config type this most closely resembles (hm2_eth, 3 stepgens,
+# which is the config type this most closely resembles (hm2_eth, stepgens,
 # open loop). Pin and parameter names are cited to source where non-obvious.
 # =============================================================================
 
@@ -112,7 +112,7 @@ addf estop-latch.0                     servo-thread
 # =============================================================================
 #
 # RESOLVED (was assumption A4): StepGen instance N drives the AXIS N connector,
-#   so stepgen.00/.01/.02 are AXIS 0/1/2 and therefore X/Y/Z.
+#   so stepgen.00/.01/.02 are AXIS 0/1/2 and therefore X/Y/Z; .03 (AXIS 3) is Y's 2nd motor.
 #
 #   The pin descriptors give the mapping exactly. From
 #   readhmid-10.10.10.10-2026-08-05.txt:108-119 and
@@ -121,7 +121,7 @@ addf estop-latch.0                     servo-thread
 #     StepGen 0   IO  4 Step   IO  5 Dir      <- AXIS 0, used as X
 #     StepGen 1   IO  6 Step   IO  7 Dir      <- AXIS 1, used as Y
 #     StepGen 2   IO  8 Step   IO  9 Dir      <- AXIS 2, used as Z
-#     StepGen 3   IO 10 Step   IO 11 Dir      <- disabled by num_stepgens=3
+#     StepGen 3   IO 10 Step   IO 11 Dir      <- AXIS 3, Y's 2nd motor (end of file)
 #     StepGen 4   IO 12 Step   IO 13 Dir      <- disabled
 #     StepGen 5   IO 14 Step   IO 15 Dir      <- disabled
 #
@@ -129,11 +129,11 @@ addf estop-latch.0                     servo-thread
 #   docs/03 found in the stock Mesa 7i96 data. Another reason that document does
 #   not apply to this board.
 #
-#   Confirmed physically since (docs/DURUM.md:115, docs/PLAN-BUGUN.md:82):
-#   jogging drives AXIS 0 = X, AXIS 1 = Y, AXIS 2 = Z, so the axis blocks are
-#   not swapped. Exception: Y does not change direction - an active DIR
-#   fault, location not yet measured (docs/PLAN-BUGUN.md Phase 1). The
-#   dump alone could only prove which FPGA pins carry which signal.
+#   Confirmed physically since (docs/DURUM.md:115): jogging drives AXIS 0 = X,
+#   AXIS 1 = Y, AXIS 2 = Z, and on 2026-11-12 AXIS 3 = StepGen 3 as well (both
+#   Y sides moved ~50 mm: left 50.3, right 49.7). The Y DIR fault is RESOLVED:
+#   two optos on one output, see the end of this file. The dump alone could
+#   only prove which FPGA pins carry which signal.
 #
 # step_type = 0 selects Step/Dir output (hostmot2.adoc:528-532).
 #   0 = Step/Dir, 1 = Up/Down, 2 = Quadrature. TB6560 wants Step/Dir.
@@ -229,13 +229,13 @@ net motor.02.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-fb => joint.2.m
 
 
 # =============================================================================
-# LIMIT AND HOME SWITCHES - DELIBERATELY NOT CONNECTED
+# LIMIT AND HOME SWITCHES - CONNECTED 2026-11-12 (Faz 5)
 # =============================================================================
 #
-# Everything in this section is commented out ON PURPOSE. The two questions below
-# are answered by hand (docs/DURUM.md:69-82) except which Y end is +. The X lines
-# are WRONG and ALL nets below read .in, not .in_not - uncomment only per
-# docs/PLAN-BUGUN.md Phase 5. Wrong polarity = always on limit or, far worse, never.
+# The nets at the end of this section are LIVE. Both questions below are
+# answered (docs/DURUM.md:69-82; Y+ = rear, Faz 2), and Faz 5 pressed every
+# switch by hand with the machine ON: each tripped its own joint's limit.
+# Wrong polarity = always on limit or, far worse, never: re-check on rewiring.
 #
 # QUESTION 1 - POLARITY. ANSWERED by hand for THIS rig (docs/DURUM.md:71):
 #   idle .in = TRUE, pressed = FALSE -> use .in_not. GRBL $5 = 0 suggests normally-open.
@@ -270,19 +270,19 @@ net motor.02.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-fb => joint.2.m
 #
 #   NOW ALSO VERIFIED BY HAND (docs/DURUM.md:69-82): 020 = X right, 021 = X left,
 #   022 = Y rear, 023 = Y front, 024 = Z top; no Z bottom switch. X+ = right and
-#   Z+ = up, so gpio.020 is the X MAXIMUM end. Y's + end is UNKNOWN (Y DIR fault).
+#   Z+ = up, so gpio.020 is X's MAXIMUM end; Y+ = rear, so gpio.022 is Y's.
 #
-# ASSUMPTION: the planned mapping below. IO numbers confirmed, and switch ends now
-#   verified by hand (docs/DURUM.md:69-82) - which shows the X lines are WRONG.
+# THE MAPPING, as netted below (all .in_not) and tested in Faz 5. A pressed
+#   switch with the machine ON gives 'joint N on limit switch error':
 #
-#     gpio.020  ->  joint.0 (X) home + one limit end
-#     gpio.021  ->  joint.0 (X) other limit end
-#     gpio.022  ->  joint.1 (Y) home + one limit end
-#     gpio.023  ->  joint.1 (Y) other limit end
-#     gpio.024  ->  joint.2 (Z) home + limit  (Z has ONE sensor, at the top)
+#     gpio.021  X LEFT   ->  joint.0 home + negative limit    N = 0
+#     gpio.020  X RIGHT  ->  joint.0 positive limit           N = 0
+#     gpio.023  Y FRONT  ->  joint.1 home + negative limit    N = 1
+#     gpio.022  Y REAR   ->  joint.1 positive limit           N = 1
+#     gpio.024  Z TOP    ->  joint.2 home + positive limit    N = 2, no Z bottom
 #
-#   Ends found by hand (DURUM.md:69-82). Y's + end: PLAN-BUGUN Phases 1-2; X fix: 5.
-#
+#   On a limit the machine will not enable: Override Limits, jog off AT ONCE -
+#   LinuxCNC 2.9 clears the override as soon as motion is next in position.
 # Note that home and limit SHARE a switch on X, Y and Z. That is why
 # HOME_IGNORE_LIMITS = YES is set on all three joints in the INI - see the
 # citation of ini-homing.adoc:168-176 there. The same switch signal gets netted
@@ -298,33 +298,33 @@ net motor.02.pos-fb  hm2_[HOSTMOT2](BOARD).0.stepgen.02.position-fb => joint.2.m
 # reference/linuxcnc/docs/src/config/stepper.adoc:123-131.
 #
 # -----------------------------------------------------------------------------
-# X - joint 0. WARNING: BACKWARDS AS WRITTEN - gpio.020 is X RIGHT, the MAXIMUM end.
-# Fix BEFORE uncommenting (PLAN-BUGUN Phase 5): gpio.021 -> home+neg, gpio.020 -> pos, .in_not.
+# X - joint 0. gpio.021 = X LEFT = home + negative limit; gpio.020 = X RIGHT = positive.
+# Inputs idle HIGH and go LOW when pressed (DURUM.md:71, Faz 5), hence .in_not.
 # -----------------------------------------------------------------------------
-# net x-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.020.in
-# net x-home-limit  => joint.0.home-sw-in
-# net x-home-limit  => joint.0.neg-lim-sw-in
-# net x-max-limit   hm2_[HOSTMOT2](BOARD).0.gpio.021.in
-# net x-max-limit   => joint.0.pos-lim-sw-in
+net x-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.021.in_not
+net x-home-limit  => joint.0.home-sw-in
+net x-home-limit  => joint.0.neg-lim-sw-in
+net x-max-limit   hm2_[HOSTMOT2](BOARD).0.gpio.020.in_not
+net x-max-limit   => joint.0.pos-lim-sw-in
 
 # -----------------------------------------------------------------------------
-# Y - joint 1. gpio.022 = rear, gpio.023 = front; which is minimum: UNKNOWN (Y DIR).
+# Y - joint 1. Y+ = rear (Faz 2): gpio.023 FRONT = home + negative, gpio.022 REAR = positive.
 # -----------------------------------------------------------------------------
-# net y-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.022.in
-# net y-home-limit  => joint.1.home-sw-in
-# net y-home-limit  => joint.1.neg-lim-sw-in
-# net y-max-limit   hm2_[HOSTMOT2](BOARD).0.gpio.023.in
-# net y-max-limit   => joint.1.pos-lim-sw-in
+net y-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.023.in_not
+net y-home-limit  => joint.1.home-sw-in
+net y-home-limit  => joint.1.neg-lim-sw-in
+net y-max-limit   hm2_[HOSTMOT2](BOARD).0.gpio.022.in_not
+net y-max-limit   => joint.1.pos-lim-sw-in
 
 # -----------------------------------------------------------------------------
 # Z - joint 2. ONE sensor only, at the TOP. Z homes UP toward it, so the top is
-# the positive limit and the home switch, and there is NO bottom limit switch
-# at all - the only thing protecting the bottom of Z travel is the soft limit
-# in [JOINT_2]MIN_LIMIT. Measure that travel before trusting it.
+# the positive limit and the home switch, and there is NO bottom limit switch.
+# Only the soft limit [JOINT_2]MIN_LIMIT = -96.5 (Faz 4: 3.3 mm above the table)
+# guards the bottom of Z - and only AFTER HOMING. Unhomed, nothing stops Z down.
 # -----------------------------------------------------------------------------
-# net z-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.024.in
-# net z-home-limit  => joint.2.home-sw-in
-# net z-home-limit  => joint.2.pos-lim-sw-in
+net z-home-limit  hm2_[HOSTMOT2](BOARD).0.gpio.024.in_not
+net z-home-limit  => joint.2.home-sw-in
+net z-home-limit  => joint.2.pos-lim-sw-in
 
 
 # =============================================================================
@@ -385,3 +385,44 @@ net watchdog      hm2_[HOSTMOT2](BOARD).0.watchdog.has_bit => estop-latch.0.faul
 # =============================================================================
 net tool-prep-loop   iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
 net tool-change-loop iocontrol.0.tool-change  => iocontrol.0.tool-changed
+
+
+# =============================================================================
+# Y's SECOND MOTOR - AXIS 3 / stepgen.03 (2026-11-12)
+# =============================================================================
+# The rig's Y has two motors, each on its own TB6560 (the two middle drivers).
+# Until 2026-11-12 both hung on AXIS 1, and neither driver ever changed
+# direction - the "Y DIR fault". Measured with the two opto inputs in parallel
+# on AXIS 1, against X's single driver on AXIS 0 (faz1_y_dir in
+# docs/board-dumps/rig-measurements-2026-11-12.json):
+#
+#     DIR high     AXIS 1 (two drivers) 2.43 V    AXIS 0 (X, one) 3.11 V
+#     DIR low                                     AXIS 0 (X, one) 0.2 V
+#     STEP idle    AXIS 1 (two drivers) 2.55 V    AXIS 0 (X, one) 3.21 V
+#
+# CAUSE, confirmed: the board's outputs are 3.3 V logic and the rig is wired
+# COMMON-CATHODE (driver CLK-/CW- to GND, the board's 5V terminal unused - not
+# the common-anode wiring of docs/09:54-62). One 3.3 V output cannot drive two
+# optocouplers. FIX: one output per driver - the second driver on AXIS 3 =
+# stepgen.03 (IO 10 Step / IO 11 Dir, docs/10), fed exactly what stepgen.01
+# gets: same INI values, same command, same enable.
+#
+# RESULTS: Y moves both ways and both stepgen counters stay equal (Gate 1).
+# In the Faz 3 SCALE check a 50.005 mm Y move measured 50.3 mm on the left
+# gantry side and 49.7 mm on the right, so AXIS 3 = StepGen 3 is physically
+# confirmed. One joint, two step generators: no separate homing or squaring
+# (the marble machine's gantry, docs/MERMER-GECIS.md, is a different job), and
+# the two sides' racking has not been checked yet - an open work item.
+# Feedback stays on stepgen.01. Needs num_stepgens=4 in [HOSTMOT2]CONFIG.
+# =============================================================================
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.step_type        0
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.position-scale   [JOINT_1]SCALE
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.steplen          [JOINT_1]STEPLEN
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.stepspace        [JOINT_1]STEPSPACE
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.dirsetup         [JOINT_1]DIRSETUP
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.dirhold          [JOINT_1]DIRHOLD
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.maxvel           [JOINT_1]STEPGEN_MAX_VEL
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.maxaccel         [JOINT_1]STEPGEN_MAX_ACC
+setp   hm2_[HOSTMOT2](BOARD).0.stepgen.03.control-type     0
+net emcmot.01.enable => hm2_[HOSTMOT2](BOARD).0.stepgen.03.enable
+net motor.01.pos-cmd => hm2_[HOSTMOT2](BOARD).0.stepgen.03.position-cmd

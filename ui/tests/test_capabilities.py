@@ -6,9 +6,21 @@ structurally (a profile that forgets a capability must fail rather than hide it)
 
 from __future__ import annotations
 
+import os
+import re
 import unittest
 
-from helpers import ALL_SCREENS, all_html, html, session, view
+from helpers import (
+    ALL_SCREENS,
+    REPO_ROOT,
+    all_html,
+    html,
+    ini_raw_values,
+    provisional_travel,
+    rig_profile,
+    session,
+    view,
+)
 
 from bettercnc.capabilities import (
     CAPABILITY_CATALOGUE,
@@ -17,13 +29,15 @@ from bettercnc.capabilities import (
     absent,
     todo,
 )
+from bettercnc.configmodel import load_machine_config
 from bettercnc.profiles import load_profile, validate_profile
 from bettercnc.render import e as escape
 from bettercnc.viewmodel import capability_panel, capability_panels
 
 
 #: Every capability the TEST RIG does not have. Each is asserted individually
-#: rather than in bulk so a failure names the capability.
+#: rather than in bulk so a failure names the capability. SOFT_LIMITS left the
+#: list on 2026-11-12, when the travel was measured (TestTestRigHasSoftLimits).
 TEST_RIG_LACKS = [
     Capability.SPINDLE,
     Capability.SPINDLE_ANALOG_SPEED,
@@ -35,12 +49,12 @@ TEST_RIG_LACKS = [
     Capability.ESTOP_INPUT,
     Capability.DOOR_SWITCH,
     Capability.FOURTH_AXIS,
-    Capability.SOFT_LIMITS,
 ]
 
 
 class TestTestRigLacksEverything(unittest.TestCase):
-    """The test rig has none of the catalogued capabilities. Assert each one."""
+    """The test rig has none of the catalogued capabilities but measured soft
+    limits. Assert each one."""
 
     def setUp(self):
         self.profile = load_profile("test-rig")
@@ -157,6 +171,65 @@ class TestRenderedMarkup(unittest.TestCase):
         markup = all_html("test-rig")
         for token in ('data-action="spindle"', 'data-action="coolant"'):
             self.assertNotIn(token, markup)
+
+
+class TestTestRigHasSoftLimits(unittest.TestCase):
+    """SOFT_LIMITS follows the INI (profiles._soft_limits_from_ini): present
+    since Faz 4 measured the travel and its ASSUMPTION markers went
+    (2026-11-12), absent again on a copy with them put back."""
+
+    def setUp(self):
+        self.profile = load_profile("test-rig")
+
+    def test_present_because_the_ini_travel_is_measured(self):
+        self.assertTrue(load_machine_config(self.profile).soft_limits_configured)  # premise
+        panel = capability_panel(self.profile, Capability.SOFT_LIMITS)
+        self.assertEqual(panel["presence"], Presence.PRESENT.value)
+        self.assertEqual((panel["badge"], panel["enabled"], panel["disabled"]), ("var", True, False))
+        self.assertEqual(panel["reason"], "")
+        self.assertIn("configs/test-rig/test-rig.ini", panel["source"])
+
+    def test_rendered_enabled(self):
+        markup = html("test-rig", "makine")
+        idx = markup.index('data-capability="soft_limits"')
+        self.assertIn('data-enabled="1"', markup[idx: idx + 220])
+
+    def test_absent_again_on_a_provisional_copy(self):
+        profile = rig_profile(self, transform=provisional_travel)
+        panel = capability_panel(profile, Capability.SOFT_LIMITS)
+        self.assertEqual(panel["presence"], Presence.ABSENT.value)
+        self.assertTrue(panel["reason"].strip())
+        self.assertTrue(panel["requirement"].strip())
+
+
+class TestFourthAxisMatchesTheConfig(unittest.TestCase):
+    """The rig's Y runs two motors as one joint since 2026-11-12: stepgen.01
+    and stepgen.03 (configs/test-rig/test-rig.hal, its last block). The
+    FOURTH_AXIS text says so; the config must still back every word."""
+
+    def setUp(self):
+        self.cap = load_profile("test-rig").capability(Capability.FOURTH_AXIS)
+        with open(os.path.join(REPO_ROOT, "configs", "test-rig", "test-rig.hal"),
+                  "r", encoding="utf-8") as fh:
+            self.hal = fh.read()
+        self.ini = ini_raw_values()
+
+    def test_the_stepgens_named_exist_and_drive_joint_1(self):
+        named = sorted(set(re.findall(r"stepgen\.(\d\d)", self.cap.reason)))
+        self.assertEqual(named, ["01", "03"])
+        enabled = int(re.search(r"num_stepgens=(\d+)", self.ini["HOSTMOT2.CONFIG"]).group(1))
+        for n in named:
+            with self.subTest(stepgen=n):
+                self.assertLess(int(n), enabled)
+                self.assertRegex(
+                    self.hal, r"stepgen\.{}\.position-scale\s+\[JOINT_1\]SCALE".format(n)
+                )
+        self.assertIn("num_stepgens={}".format(enabled), self.cap.requirement)
+
+    def test_still_three_axes_one_y_joint(self):
+        self.assertTrue(self.cap.reason.startswith("{} eksen.".format(self.ini["KINS.JOINTS"])))
+        self.assertEqual(self.ini["TRAJ.COORDINATES"].split(), ["X", "Y", "Z"])
+        self.assertIs(self.cap.presence, Presence.ABSENT)
 
 
 class TestProfileCompleteness(unittest.TestCase):

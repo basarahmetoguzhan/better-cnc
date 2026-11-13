@@ -217,6 +217,11 @@ class HomingState(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+#: The step LinkHealth.problems gives after a lost board link, once the
+#: cable and the board's supply are checked.
+LINK_RESET_STEP = "sonra «Yazılım sıfırla»ya basın"
+
+
 class LinkHealth(NamedTuple):
     """Ethernet link health.
 
@@ -281,6 +286,12 @@ class LinkHealth(NamedTuple):
         driver a cable pull raises io_error alone) - and both are cleared by
         «Yazılım sıfırla» (_clear_link_faults); the reset also unhomes.
         """
+        return self.problems_with(LINK_RESET_STEP)
+
+    def problems_with(self, reset_step: str) -> List[str]:
+        """problems, with `reset_step` as the step after checking the cable.
+        Observer mode (app.py --observe) has no «Yazılım sıfırla» to press
+        (viewmodel.OBSERVE_LINK_RESET_STEP)."""
         out: List[str] = []
         if not self.connected:
             out.append("Kart bağlantısının durumu okunamıyor — kartla iletişim bilinmiyor.")
@@ -295,8 +306,8 @@ class LinkHealth(NamedTuple):
         if self.watchdog_has_bit or self.io_error:
             out.append(
                 "Kartla bağlantı koptu — makine durduruldu. Ethernet kablosunu ve "
-                "kartın beslemesini kontrol edin, sonra «Yazılım sıfırla»ya basın. "
-                "Ardından referansı yeniden alın."
+                "kartın beslemesini kontrol edin, {}. "
+                "Ardından referansı yeniden alın.".format(reset_step)
             )
         if (self.packet_error_total or 0) > 0:
             out.append(
@@ -379,6 +390,27 @@ class MachineState(NamedTuple):
     #: power and the link come from HAL pins, read separately, so they keep
     #: their own meaning.
     status_known: bool = True
+    #: The switch inputs live, as (HAL pin, value) in the profile's input
+    #: order: the pin each profile input names (profiles.DigitalInput.hal_pin
+    #: - the one the HAL nets take, so TRUE means the switch is pressed),
+    #: None for a pin that could not be read. Empty when the adapter reads no
+    #: inputs at all (MockAdapter): nothing is known, which the view must not
+    #: show as "free". HAL pins, like the link: they keep their meaning while
+    #: LinuxCNC's status is unknown.
+    input_values: Tuple[Tuple[str, Optional[bool]], ...] = ()
+    #: The step generators' timing parameters live, as (HAL name, ns), e.g.
+    #: ("hm2_7i92.0.stepgen.00.steplen", 10000); None for one that could not
+    #: be read. What the driver runs, which may differ from the INI after a
+    #: halcmd setp. Empty when not read (MockAdapter, or an INI that gives no
+    #: board or no num_stepgens).
+    stepgen_timing: Tuple[Tuple[str, Optional[int]], ...] = ()
+
+    def input_value(self, hal_pin: str) -> Optional[bool]:
+        """input_values for one pin; None when unread or unreadable."""
+        for pin, value in self.input_values:
+            if pin == hal_pin:
+                return value
+        return None
 
     # -- the program-start gate ---------------------------------------------
 

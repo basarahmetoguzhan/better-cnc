@@ -5,9 +5,11 @@ verified hardware. Code lives in [ui/](../ui/), run instructions in
 [ui/README.md](../ui/README.md).
 
 **Status: implementation VERIFIED against the repo's own config and docs;
-`LinuxCncAdapter` tested against a fake built from the LinuxCNC 2.9 source, and
+`LinuxCncAdapter` tested against a fake built from the LinuxCNC 2.9 source,
 since 2026-10-19 run against a real LinuxCNC 2.9.9 in the simulator
-([sim/](../sim/README.md)), but not yet against the machine.** The server
+([sim/](../sim/README.md)), and on 2026-11-12 run on the machine for the first time —
+view-only, beside AXIS, through an out-of-repo viewer that cut its command paths
+(what it showed: Known gaps). Its commands have never driven the machine.** The server
 renders from a mock adapter by default (`--adapter linuxcnc` for the real one),
 and says which only on the server's stderr; a `--dump` page carries no such
 note.
@@ -19,12 +21,12 @@ note.
 | | |
 |---|---|
 | Stack | Python 3 stdlib only + server-side HTML |
-| Tests | 845, all passing, no expected failures, `make test` (796 UI + 49 in `scripts/test_grbl2ini.py`; 4 keymap tests run only where libxkbcommon is, e.g. `sim/sim.sh test`); also on arm64 + Python 3.13 in the simulator (`sim/sim.sh test`) |
+| Tests | 927 on 2026-11-13, all passing, no expected failures, `make test` (878 UI + 49 in `scripts/test_grbl2ini.py`; 4 keymap tests run only where libxkbcommon is, e.g. `sim/sim.sh test`); the suite also runs on arm64 + Python 3.13 in the simulator (`sim/sim.sh test`) |
 | Coverage | **99.5 %** (`make coverage`); `adapter.py` 99.0 % |
 | Screens | 6, as the prototype: Kontrol / Program / Probing / Takımlar / Alarmlar / Makine |
 | Profiles | `test-rig` (verified) and `marble` (TODO placeholders) |
 | Prototype facts corrected | 24, table below |
-| Machine connection | none by default — the server runs `MockAdapter`; `--adapter linuxcnc` runs `LinuxCncAdapter`, which is tested against `ui/tests/fake_linuxcnc.py`, has run against LinuxCNC 2.9.9 in `sim/`, and has never run on a machine |
+| Machine connection | none by default — the server runs `MockAdapter`; `--adapter linuxcnc` runs `LinuxCncAdapter`, which is tested against `ui/tests/fake_linuxcnc.py`, has run against LinuxCNC 2.9.9 in `sim/`, and on the machine only view-only beside AXIS (2026-11-12, an out-of-repo viewer with its commands cut) |
 
 ---
 
@@ -136,16 +138,18 @@ where it will actually be read.
 `flow_interlock` · `tool_probe` · `tool_length_sensor` · `estop_input` ·
 `door_switch` · `fourth_axis` · `soft_limits`
 
-All eleven are ABSENT on the test rig today and TODO on marble — so on both
-profiles every capability renders disabled, which is exactly the state the tests
-assert capability by capability.
+All eleven are TODO on marble. On the test rig ten are ABSENT — hardware the rig
+does not have — and render disabled, capability by capability, on both profiles;
+the eleventh follows the INI.
 
 Ten of the test rig's eleven are fixed facts in `profiles.test_rig_profile`.
 `soft_limits` is not: it is derived from the INI (`profiles._soft_limits_from_ini`),
 through the same loader the screens use. While the travel limits carry their
 provisional markers it is ABSENT, and its reason names the unmeasured axes
 (`Strok ÖLÇÜLMEDİ (X, Y, Z)…`). Once the markers are removed it turns PRESENT
-with no code change (see D below).
+with no code change (see D below). The rig's travel was measured on 2026-11-12
+(soft limits X 3–399, Y 3–387, Z −96.5–−3 mm) and its markers are removed, so on the
+rig `soft_limits` is PRESENT.
 
 ---
 
@@ -161,8 +165,8 @@ with no code change (see D below).
                     └──────┬───────────────┬──────┘
                            │               │
                    MockAdapter        LinuxCncAdapter
-                (server default)   (tested against a fake,
-                                    never run on a machine)
+                (server default)   (tested against a fake;
+                                    machine: view-only so far)
                            │               │
                            └──── mdi.py ───┘
                          one MDI gate, shared
@@ -293,7 +297,7 @@ guarded like the rest since 2026-10-21. Not measured.
 |---|---|
 | Board identity, IO count, clock — from `board-dumps/readhmid-*` | Axis positions (start at 0, a jog moves them at once) |
 | SCALE, velocity, accel, step timing, HOME_SEQUENCE, HOME_IGNORE_LIMITS, SERVO_PERIOD — read from `test-rig.ini` at runtime | Link health counters (0 / `iyi` / `yok`), shown like readings |
-| Input map, polarity, Z asymmetry — `docs/DURUM.md:69-80` | Alarm log seed entries (`hm2_eth: 7i92 bulundu…`, `Üç stepgen aktif…`), stamped with the current time |
+| Input map, polarity, Z asymmetry — `docs/DURUM.md:69-80` | Alarm log seed entries (`hm2_eth: 7i92 bulundu…`, `4 stepgen aktif, 3 eksen jog ediyor` — counted from the INI's `num_stepgens` and axes), stamped with the current time |
 | Kernel, NIC, host — `docs/DURUM.md:20-27` | Homing (completes instantly) |
 | Capability reasons and requirements — `docs/MERMER-GECIS.md` §2 | Program progress |
 | The estop, homing and MDI **rules** (enforced in `MockAdapter`, not faked; the MDI gate is the real adapter's `mdi.mdi_refusal`) | |
@@ -421,14 +425,14 @@ reintroducing one fails the suite by name.
 The three fabricated inputs (estop, tool sensor, flow) correspond to capabilities
 the machine lacks, and now render as disabled capabilities instead of fake inputs.
 
-### Axis numbers ~50× wrong
+### Axis numbers invented (up to 10× off)
 
 | Prototype | Reality | Source |
 |---|---|---|
-| X/Y 80.000 steps/mm | **833.300 / 823.500** | test-rig.ini `[JOINT_0/1]SCALE` |
-| Z 400.000 steps/mm | **1250.000** | test-rig.ini `[JOINT_2]SCALE` |
-| 40 / 40 / 8 mm/s | **3 mm/s** all axes (deliberate first-run value) | test-rig.ini `MAX_VELOCITY` |
-| 500 / 500 / 300 mm/s² | **10 mm/s²** all axes | test-rig.ini `MAX_ACCELERATION` |
+| X/Y 80.000 steps/mm | **100.085 / 98.592** — measured 2026-11-12; the GRBL values the INI first held, 833.300 / 823.500, were ~8.3× too high | test-rig.ini `[JOINT_0/1]SCALE` |
+| Z 400.000 steps/mm | **122.274** — measured; GRBL's 1250.000 was ~10.2× too high | test-rig.ini `[JOINT_2]SCALE` |
+| 40 / 40 / 8 mm/s | **10 / 10 / 5 mm/s** (2026-11-12; the first runs used 3 mm/s) | test-rig.ini `MAX_VELOCITY` |
+| 500 / 500 / 300 mm/s² | **50 mm/s²** all axes (2026-11-12; was 10) | test-rig.ini `MAX_ACCELERATION` |
 
 Read from the INI at runtime, not copied. The tests parse the INI with their own
 parser and compare — so config and UI cannot drift apart silently.
@@ -446,8 +450,8 @@ parser and compare — so config and UI cannot drift apart silently.
 
 | Prototype | Reality | Source |
 |---|---|---|
-| PREEMPT_RT **arm64** | **`6.12.95+deb13-rt-amd64`** — a laptop on a live USB, not a Pi | DURUM.md:22 |
-| max jitter **38 µs** | **never measured** → renders `—` | DURUM.md |
+| PREEMPT_RT **arm64** | **`6.12.95+deb13-rt-amd64`** — a PC on a live USB (a laptop in 2026-08, an MSI desktop since 2026-11-12), not a Pi | DURUM.md:22 |
+| max jitter **38 µs** | **`latency-test` never run** → renders `—`. (The servo thread's `tmax` was read off the machine on 2026-11-12 — about 0.52 ms in a GRUB failsafe boot, 3.4 ms earlier in a normal multi-core boot — but the UI does not read it.) | DURUM.md |
 | latency 38 µs in the header | removed; header shows link health instead | — |
 
 A test greps every screen for `\d+\s*µs` and fails on any match, so a fabricated
@@ -457,14 +461,14 @@ latency figure cannot creep back in.
 
 | Prototype | Reality |
 |---|---|
-| X 0–300 mm, Y 0–180 mm, Z −45–0 mm | **not measured** → renders `ölçülmedi` |
+| X 0–300 mm, Y 0–180 mm, Z −45–0 mm | **measured 2026-11-12:** soft limits X 3–399, Y 3–387, Z −96.5–−3 mm. Until then **not measured** → rendered `ölçülmedi` |
 
-The INI *does* contain 0–150 / −50–0, because LinuxCNC needs values, but they sit
+Until then the INI held 0–150 / −50–0, because LinuxCNC needs values, but they sat
 under `# ASSUMPTION:` comments. `iniload.py` reads that marker and marks the
-values provisional; the UI then refuses to display them. A test asserts the
+values provisional; the UI then refuses to display them. A test asserts that
 provisional numbers appear on **no** screen.
 
-When travel is finally measured and the marker words (`ASSUMPTION:`,
+Once travel is measured and the marker words (`ASSUMPTION:`,
 `PROVISIONAL`, `MUST BE MEASURED`) are deleted from the comments above the
 limits, the UI starts showing numbers with no code change. That now holds for
 everything that depends on travel: the DRO and the Makine axis rows, the
@@ -484,7 +488,7 @@ with only its marker words deleted (`helpers.strip_markers`, and its twin in
 | probe modes operable | no probe → flow preserved but disabled |
 | tool T6 = "Prob (tool sensörü)" | **a probe is a HAL input, not a tool** — removed from the table |
 | 6 tools with length offsets (42.180 mm …) | `tool.tbl` **does not exist** → table empty with the reason |
-| 5 program files, 4 812 lines, 18 dk | no `.ngc` files in the repo → list empty with the reason |
+| 5 program files, 4 812 lines, 18 dk | invented; the program directory is not read yet → list empty with the reason (`nc_files/faz8-kare.ngc`, phase 8, sits in `PROGRAM_PREFIX`; AXIS loads it) |
 | probe speeds 300 / 25 mm/dk | no probe → parameters render `—` |
 
 The empty tool table is a correction beyond the brief's list: `[EMCIO]TOOL_TABLE`
@@ -873,7 +877,7 @@ Actions refuse as described under "How `LinuxCncAdapter` drives LinuxCNC".
 ## Tests
 
 ```bash
-make test          # 845 tests, everything incl. scripts/test_grbl2ini.py
+make test          # everything incl. scripts/test_grbl2ini.py (927 tests on 2026-11-13)
 make coverage      # 99.5 %
 ```
 
@@ -964,7 +968,8 @@ survive are listed under What is NOT covered.
 **1. `LinuxCncAdapter` on a real machine.** It is now tested —
 `test_linuxcnc_adapter.py` (231 tests) drives every action against
 `fake_linuxcnc.py` and asserts the exact command sequence and that the fake
-refused nothing — but it has never run against LinuxCNC. The
+refused nothing — but on a real machine it has only read one, view-only
+(2026-11-12, beside AXIS, its commands cut by an out-of-repo viewer). The
 fake is only as right as our reading of the source. It does not model echo
 latency or real time (commands complete synchronously), the GIL hold of a real
 wait (a fake wait releases it), soft and hard limits, velocity clamping, the
@@ -1001,8 +1006,9 @@ change could make the UI unreadable with every test passing.
 
 **5. Anything about the real machine.** These tests prove the UI agrees with the
 repo's config and docs. They cannot prove the config is right about the machine —
-travel is unmeasured, Y's DIR wiring is a known active fault
-(`docs/DURUM.md:12`), and latency was never measured.
+that rests on the rig's own measurements (scale, travel, homing, 2026-11-12,
+`docs/DURUM.md`; the Y DIR fault is fixed, `docs/DURUM.md:12`), and `latency-test`
+was never run.
 
 **6. Concurrency, partly.** Tested: `TestSessionLocking` blocks a jog inside the
 adapter and shows the software estop still reaches it while every other action
@@ -1025,6 +1031,46 @@ counter, and the estop latch's start and reset states).
 ---
 
 ## Known gaps and next steps
+
+Seen on the real machine on 2026-11-12. The UI ran view-only beside AXIS through
+an out-of-repo viewer: the real `LinuxCncAdapter` with its command channel replaced
+by a recorder, `_drain_errors` and `_stop_on_link_fault` off and the error channel
+left to AXIS; only the software estop could go out. What it showed, and where
+each item stands after phase 9:
+
+- **Soft limits shown as unmeasured** — `ölçülmedi` and `Yumuşak limitler
+  tanımsız`, because the INI still carried the travel markers. The travel was
+  measured the same day (soft limits X 3–399, Y 3–387, Z −96.5–−3 mm); with the
+  markers gone the UI shows the numbers with no code change (D above).
+  → **Fixed:** the INI's travel markers are removed and the screens show those
+  limits.
+- **Stale profile notes** — the Y DIR fault note and the text that Y's switch ends
+  are unknown (`profiles.py`). Both were settled that day: the fault is fixed and
+  Y+ is rear. → **Fixed:** `profiles.py` has Y's ends (`gpio.022` +, `gpio.023` −)
+  and updated Y notes.
+- **No live switch state on Alarmlar** — the real adapter read only the link pins,
+  not `gpio.020`–`024`. → **Added in phase 9:** each input's `.in_not` pin is read
+  into a Durum column (`ui/tests/test_observe_and_live_hal.py`; fake LinuxCNC
+  only, not yet seen on the machine).
+- **Step timing shown from the INI, not live HAL** — `stepgen.NN.steplen` and the
+  rest were not read back. → **Added in phase 9:** a `Canlı (HAL)` row on the
+  Makine screen, read from `stepgen.00`–`03` `steplen`/`stepspace`/`dirsetup`/
+  `dirhold` beside the INI's (same tests; fake LinuxCNC only, not yet seen on the
+  machine).
+- **The gate contradicts itself after homing** — `Program başlatılabilir` next to
+  the `limitler tanımsız` warning. → **Fixed** with the markers: the warning no
+  longer shows.
+- **No observer mode in the repo.** The stock app sends `state(STATE_ESTOP)` on a
+  page load when `io_error` is set (`_stop_on_link_fault`) and drains the NML error
+  channel (`_drain_errors`); both conflict with running beside AXIS, which is why
+  the viewer had to cut them. → **Added in phase 9:** `--observe` opens no error
+  channel, refuses every action but the software estop and shows every other
+  control disabled, with a banner on every screen. The link-fault estop is deliberately
+  kept in `--observe`: on the real driver a cable pull raises `io_error` alone and
+  LinuxCNC keeps the machine ON. Tested against fake LinuxCNC only (same tests);
+  what remains open is one run beside AXIS on the machine
+  ([OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B12).
+- **Minor layout issues.** Still open.
 
 Open, and not to be read as fixed:
 
@@ -1067,7 +1113,8 @@ Open, and not to be read as fixed:
 - **The estop's HTTP response can wait.** `Session.view` still takes the session
   lock, so the page answering an estop waits for a bounded action in progress.
   The command itself has gone out.
-- **`LinuxCncAdapter` has never run on a real machine**, and its timing
+- **`LinuxCncAdapter` has never driven a real machine** (on 2026-11-12 it only
+  read one, view-only — above), and its timing
   constants are chosen, not measured: `WAIT_TIMEOUT_S` = 0.25 s, the
   3 × `[EMCIO]CYCLE_TIME` reset deadline, the 64-message drain cap and the 10 s
   request timeout. They are the first things to check on the rig. (In `sim/`,
@@ -1233,7 +1280,8 @@ Also open, found while writing this:
 
 Next steps:
 
-- **`LinuxCncAdapter` needs one session on the machine.** Start the UI with
+- **`LinuxCncAdapter` needs one session driving the machine.** Its read path ran
+  on the rig on 2026-11-12, view-only beside AXIS (above). Start the UI with
   `--adapter linuxcnc` after LinuxCNC is up (the banner then says
   `LinuxCncAdapter — komutlar LinuxCNC'ye GİDİYOR`, decided from the adapter
   built: `app.adapter_banner`) and compare against `halmeter`. The checklist
@@ -1248,10 +1296,11 @@ Next steps:
   0.25 s waits cause refusals that succeed on retry (sim: none); and that the
   UI process exits with LinuxCNC (sim: within about 2 s). There is no hardware
   estop on the rig: keep a hand on the power.
-- **Y axis DIR fault** (`docs/DURUM.md:12`) is rendered as an error in the mock's
-  alarm log and, from the profile's notes, in the Kontrol warnings. It is
-  hardcoded there rather than read from a live pin, because it is a hardware
-  fault (location not yet measured), not a machine state.
+- **Y axis DIR fault** (`docs/DURUM.md:12`) — fixed on the rig on 2026-11-12
+  (Y's second driver moved to AXIS 3). It was rendered as an error in the mock's
+  alarm log and, from the profile's notes, in the Kontrol warnings, hardcoded
+  rather than read from a live pin because it was a hardware fault, not a
+  machine state; those notes went stale with the fix (above).
 - **Marble profile is a skeleton.** Eleven TODOs, no INI, no input map. It exists
   now so the gaps are visible; fill it as `docs/01-machine-survey.md` fills.
   Its invented homing config is listed under "Also open".

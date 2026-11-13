@@ -16,7 +16,7 @@ unutulursa mermer makinesinde eksik çıkar.
 | **İkinci, izole 24V güç kaynağı** | `OUT1`/`OUT2` NMOS çıkışları ve 0-10V analog çıkış **yalnızca** ikinci 24V girişinden besleniyor. Üretici ortak şaseyi açıkça yasaklıyor. Bu kaynak olmadan su pompası ve VFD hız kontrolü **hiç çalışmaz** | ❌ alınmadı (B7) |
 | Su debi sensörü | Su kilidi için. Yoksa pompa rölesinin geri bildirimiyle idare edilir ama zayıf | ❌ |
 | Takım boyu sensörü | Elmas uçların boy telafisi | ❌ |
-| Seviye çevirici (gerekirse) | Mermer makinesinin sürücüleri 24V sinyal isterse. Test tezgahında TB6560 optokuplörlü 5V ile çalışıyor | ⏳ envanter bekliyor (B4) |
+| Seviye çevirici / tampon (gerekirse) | Mermer makinesinin sürücüleri 24V sinyal isterse. Test tezgahında TB6560 optokuplörleri kartın **3,3 V** çıkışıyla doğrudan sürülüyor (ortak katot, 5V klemensi boş). **Bir çıkış = bir optokuplör:** 2026-11-12'de iki Y sürücüsü aynı çıkıştayken DIR yüksek seviyesi 2,43 V'a düştü (tek sürücüde 3,11 V) ve iki sürücü de yönü göremedi — çift motorlu eksende her sürücüye ayrı çıkış ya da tampon | ⏳ envanter bekliyor (B4) |
 
 > **24V TUZAĞI:** kartta iki adet `24V GND` klemensi var ve **serigrafide ikisi de
 > aynı yazıyor.** Yanlışına bağlanırsa kart yarı canlı görünür (bir LED yanar) ama
@@ -38,7 +38,7 @@ Her biri mermer makinesinde açılacak. Açmak için gereken koşul yanında.
 | **Su kilidi (interlock)** | yok | HAL mantığı: **debi yoksa iğ mili dönmez.** Elmas uç susuz kesimde saniyeler içinde gider |
 | **Takım boyu probu** | yok | GPIO girişi + sensör. Probing ekranının Z modu buna bağlı |
 | **Donanımsal e-stop girişi** | yok (GUI e-stop kullanılıyor) | Bir GPIO girişi + kontaktör/güvenlik rölesi |
-| **4. eksen / gantry Y** | yok | `num_stepgens=4`, `stepgen.03` zaten IO 10/11'de hazır, firmware değişikliği gerekmiyor |
+| **4. eksen / gantry Y** | yok — test tezgahında Y'nin iki motoru tek eklem: `stepgen.01` (AXIS 1) ve `stepgen.03` (AXIS 3, IO 10/11) aynı komutu alıyor, ayrı referans ve kareleme yok (2026-11-12) | Portal için Y'yi iki ekleme bölmek: `trivkins coordinates=XYYZ`, 4 joint, negatif `HOME_SEQUENCE` (§3 "Kinematik"). `num_stepgens=4` test tezgahında zaten açık, firmware değişikliği gerekmiyor |
 
 **Arayüz kuralı:** bu modüller test tezgahında **gizlenmeyecek, disabled görünecek.**
 Sebebi ekranda yazacak ("bu makinede iğ mili yok"), böylece mermer makinesine
@@ -50,9 +50,9 @@ geçince neyin eksik olduğu kendiliğinden ortaya çıkar.
 
 ### hm2_eth config string
 
-Test tezgahı:
+Test tezgahı (2026-11-12'den beri `num_stepgens=4`: `stepgen.03` Y'nin ikinci motorunu sürüyor):
 ```
-num_stepgens=3 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx
+num_stepgens=4 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx
 ```
 
 Mermer makinesi (tek Y):
@@ -81,11 +81,11 @@ son hareketi senkron tamamlar ve portalı kareye getirir
 ### Ölçek ve limitler
 
 Test tezgahının hiçbir sayısı taşınmaz. Mermer makinesi için:
-- `SCALE` — eski Windows kontrolcüsünün steps/mm değerlerinden türetilecek,
+- `SCALE` — eski Windows kontrolcüsünün steps/mm değerleri yalnız başlangıç noktası; **makinede ölçülerek** bulunacak (test tezgahında GRBL'den gelen 833,3 / 823,5 / 1250 bu mekanik için ~8,3× / 10,2× yanlıştı — 2026-11-12, yöntem: yeni = eski × komut ÷ ölçüm, `docs/DURUM.md`),
   sonra komparatörle doğrulanacak
 - `MAX_VELOCITY` / `MAX_ACCELERATION` — gantry kütlesine göre baştan ayarlanacak.
-  Test tezgahının 3 mm/s ve 10 mm/s² değerleri anlamsız
-- Strok / soft limitler — ölçülecek
+  Test tezgahının 10 / 10 / 5 mm/s ve 50 mm/s² değerleri mermer için anlamsız
+- Strok / soft limitler — ölçülecek (test tezgahı yöntemi: switch tetiklenme noktaları ölçülüp limitler her uçtan ≥3 mm içeride, 2026-11-12)
 - Step zamanlaması — mermer makinesinin sürücülerine göre. TB6560 için
   hesaplanan 10 µs / 50 µs değerleri o sürücüler için geçerli değil
 
@@ -138,8 +138,8 @@ fiziksel klemenste. Tek Y senaryosunda:
 |---|---|
 | **Acil stop** | Sürücü ve iğ mili gücünü **donanımsal** kesmeli. LinuxCNC'nin haberi olması iyidir ama yazılım güvenlik fonksiyonu değildir. Pi/PC çökse bile makine durmalı |
 | **Su kilidi** | Debi yoksa iğ mili çalışmaz. HAL'de kurulacak |
-| **Soft limitler** | Strok ölçülüp yazılacak. Test tezgahında da eksik, orada da tamamlanacak |
-| **Limit switch'ler** | Home ile paylaşılıyor → her eklemde `HOME_IGNORE_LIMITS = YES`. Bunun sonucu: **homing sırasında limitleri durduracak hiçbir şey yok.** Switch'in yanlış tarafından başlanırsa sert çarpışma (`ini-homing.adoc:46`). Homing öncesi eksenin doğru tarafta olduğu doğrulanmalı |
+| **Soft limitler** | Strok ölçülüp yazılacak. Test tezgahında 2026-11-12'de ölçüldü ve kanıtlandı (limit ötesi MDI reddedildi, eksen kıpırdamadı) |
+| **Limit switch'ler** | Home ile paylaşılıyor → her eklemde `HOME_IGNORE_LIMITS = YES`. Bunun sonucu: **homing sırasında limitleri durduracak hiçbir şey yok.** Switch'in yanlış tarafından başlanırsa sert çarpışma (`ini-homing.adoc:46`). Homing öncesi eksenin doğru tarafta olduğu doğrulanmalı. Test tezgahından dersler (2026-11-12): her girişin polaritesi elle doğrulanmalı (orada aktif-düşük: boşta HIGH, basınca LOW → `.in_not`, §8); bir eklem limitte dururken makine açılmaz; LinuxCNC 2.9 Override Limits'i hareket bir sonraki kez yerine oturur oturmaz kaldırır (`control.c:1278-1282`) → limitten kurtulmak için override'dan hemen sonra tek jog'la switch'ten çıkılmalı |
 | **Homing sırası** | **Z → Y → X.** Test tezgahında `HOME_SEQUENCE` Z=0, Y=1, X=2 (`configs/test-rig/test-rig.ini`). Kritik olan Z'nin ilk olması — takım geri çekilsin. X/Y arası sıra serbest. Mermer makinesinde çift Y varsa iki Y joint'i **negatif** `HOME_SEQUENCE` ile senkron home eder |
 
 ---
@@ -178,12 +178,12 @@ Bunlar makineden bağımsız, doğrudan geçerli (giriş polaritesi hariç — a
 
 - Kart `7I92` olarak tanıtıyor, HAL öneki `hm2_7i92.0`
 - 34 IO, 2 port × 17, ClockLow 100 MHz
-- `AXIS n` konnektörü → `stepgen.0n`
+- `AXIS n` konnektörü → `stepgen.0n` (test tezgahında AXIS 3 → `stepgen.03` de hareketle doğrulandı, 2026-11-12)
 - Üretici serigrafisindeki pin numaraları = global IO numarası
 - IO 17–24 kalıcı saf GPIO, hiçbir modül alamaz
-- Test tezgahında girişler switch'e basılmamışken HIGH okuyor — ama polarite makineden bağımsız değil, switch tipine bağlı: test tezgahının switch'leri NO gibi davranıyor (GRBL `$5 = 0` bunu destekliyor, kanıtlamıyor), tetiklenince LOW → `.in_not`. Mermerde planlanan NC seri zincirde (`docs/01`) okuma ters beklenir, endüktif sensörde (NPN/PNP) farklı olabilir; devreye almada her giriş elle tetiklenerek yeniden doğrulanacak
-- `sserial_port_0=xxxxxxxx` doğru devre dışı bırakma biçimi
-- İki 24V klemensi aynı etiketli, ana besleme buck çeviricinin yanındaki
+- Test tezgahında girişler switch'e basılmamışken HIGH okuyor — ama polarite makineden bağımsız değil, switch tipine bağlı: test tezgahının switch'leri NO gibi davranıyor (GRBL `$5 = 0` bunu destekliyor, kanıtlamıyor), tetiklenince LOW → `.in_not`. Mermerde planlanan NC seri zincirde (`docs/01`) okuma ters beklenir, endüktif sensörde (NPN/PNP) farklı olabilir; devreye almada her giriş elle tetiklenerek yeniden doğrulanacak (test tezgahında Faz 5'te, 2026-11-12, HAL net'leriyle de doğrulandı: aktif-düşük, her switch makine açıkken `joint N on limit switch error` verdi)
+- `sserial_port_0=xxxxxxxx` doğru devre dışı bırakma biçimi; iki 24V klemensi aynı etiketli, ana besleme buck çeviricinin yanındaki
+- LinuxCNC işletmesi (2026-11-12): TERM ile kapanıştan sonra sahipsiz kalan motion paylaşımlı belleği (SysV key `0x00000064`, nattch 0) sonraki açılışı düşürüyor ("A configuration error is preventing LinuxCNC from starting") → hiçbir LinuxCNC süreci yokken, başlatmadan önce `ipcrm` ile silinmeli; kiosk bunu yapıyor (`deploy/README.md`)
 
 ---
 

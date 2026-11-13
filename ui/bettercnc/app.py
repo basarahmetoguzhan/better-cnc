@@ -2,6 +2,7 @@
 
     python3 -m bettercnc.app --profile test-rig --port 8080
     python3 -m bettercnc.app --profile test-rig --adapter linuxcnc
+    python3 -m bettercnc.app --adapter linuxcnc --observe --ini FILE   # beside AXIS
 
 Routes:
     GET  /                 full page
@@ -88,6 +89,13 @@ class Session:
 
     Every adapter call runs under self._lock, one at a time, except
     software_estop - see act().
+
+    `observe` (--observe) is the read-only mode for running beside AXIS,
+    which then runs the machine: act() passes the software estop alone, and
+    every screen says so and shows its other controls disabled (VM.build
+    with observe). The adapter gets the flag too (build_session): the real
+    one then leaves LinuxCNC's error messages to AXIS and refuses actions on
+    its own as well, while its link-fault estop stays.
     """
 
     def __init__(
@@ -96,10 +104,12 @@ class Session:
         profile: MachineProfile,
         config: MachineConfig,
         clock: Callable[[], float] = time.monotonic,
+        observe: bool = False,
     ):
         self.adapter = adapter
         self.profile = profile
         self.config = config
+        self.observe = observe
         self._lock = threading.Lock()
         self._clock = clock
         self._last_client: Optional[float] = None
@@ -127,7 +137,7 @@ class Session:
     def view(self, screen: str) -> Dict[str, Any]:
         with self._lock:
             state = self.adapter.snapshot()
-        return VM.build(self.profile, self.config, state, screen=screen)
+        return VM.build(self.profile, self.config, state, screen=screen, observe=self.observe)
 
     def act(self, action: str, value: str) -> None:
         """Apply an intent. Unknown actions are ignored rather than raising:
@@ -180,10 +190,17 @@ class Session:
         Not wired yet: load_program exists on both adapters, but no action
         here calls it, because the program screen lists no files to pick
         (viewmodel.program_screen returns an empty "files").
+
+        Observer mode (self.observe): every action after the estop is
+        dropped unseen by the adapter, as an unknown one is - the screens
+        offer none of them then, so only a stale or hand-made request gets
+        here.
         """
         a = self.adapter
         if action == "software_estop":
             a.software_estop()
+            return
+        if self.observe:
             return
         with self._lock:
             if action == "software_reset":
@@ -232,13 +249,20 @@ ADAPTERS = ("mock", "linuxcnc")
 
 
 def build_session(
-    profile_key: str = "test-rig", adapter_kind: str = "mock", ini_path: Optional[str] = None
+    profile_key: str = "test-rig",
+    adapter_kind: str = "mock",
+    ini_path: Optional[str] = None,
+    observe: bool = False,
 ) -> Session:
     """`ini_path` replaces the profile's INI: the kiosk passes the INI
     LinuxCNC was started with (deploy/bettercnc-display), so the UI never
     describes one machine while LinuxCNC drives another. The profile is
     built from it (load_profile), not merely pointed at it: its SOFT_LIMITS,
-    travel and switch facts come from the INI too."""
+    travel and switch facts come from the INI too.
+
+    `observe`: the read-only mode beside AXIS (Session). The mock takes it
+    as well - it sends nothing anyway - so the observer screens can be
+    looked at off the machine (`--dump kontrol --observe`)."""
     profile = load_profile(profile_key, ini_path)
     validate_profile(profile)
     config = load_machine_config(profile)
@@ -246,12 +270,12 @@ def build_session(
     if adapter_kind == "mock":
         adapter = MockAdapter(profile)
     elif adapter_kind == "linuxcnc":
-        adapter = LinuxCncAdapter(profile)
+        adapter = LinuxCncAdapter(profile, observe=observe)
     else:
         raise ValueError(
             "unknown adapter {!r} (valid: {})".format(adapter_kind, ", ".join(ADAPTERS))
         )
-    return Session(adapter, profile, config)
+    return Session(adapter, profile, config, observe=observe)
 
 
 def adapter_banner(adapter: MachineAdapter) -> str:
@@ -261,6 +285,13 @@ def adapter_banner(adapter: MachineAdapter) -> str:
     if isinstance(adapter, MockAdapter):
         return "  (mock adapter — makineye bağlı DEĞİL)\n"
     return "  ({} — komutlar LinuxCNC'ye GİDİYOR)\n".format(type(adapter).__name__)
+
+
+#: serve()'s extra banner line in observer mode (--observe).
+OBSERVE_BANNER = (
+    "  SALT İZLEME — makine AXIS'ten kullanılıyor: yalnız acil stop gönderilir, "
+    "LinuxCNC'nin hata mesajları AXIS'te kalır\n"
+)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -430,12 +461,14 @@ def serve(
     exit_reason_file: Optional[str] = None,
     ini_path: Optional[str] = None,
     startup_note_file: Optional[str] = None,
+    observe: bool = False,
 ) -> Optional[int]:
     """Run the server until Ctrl-C (None) or, with `exit_if_lost_s`, until
     supervise() ends it (EXIT_LINUXCNC_LOST). `startup_note_file`: a line
     the kiosk left about why the control system last stopped, shown as the
-    UI comes up (deploy/kiosk-session)."""
-    Handler.session = build_session(profile, adapter_kind, ini_path)
+    UI comes up (deploy/kiosk-session). `observe`: read-only beside AXIS
+    (Session)."""
+    Handler.session = build_session(profile, adapter_kind, ini_path, observe)
     Handler.boot_url = boot_url
     note = read_startup_note(startup_note_file)
     if note:
@@ -445,6 +478,8 @@ def serve(
         "better-cnc UI · profil={} · http://{}:{}/\n".format(profile, host, port)
     )
     sys.stderr.write(adapter_banner(Handler.session.adapter))
+    if Handler.session.observe:
+        sys.stderr.write(OBSERVE_BANNER)
     ended: Dict[str, str] = {}
     if exit_if_lost_s is not None:
         session = Handler.session
@@ -510,6 +545,12 @@ def main(argv: Optional[list] = None) -> int:
         metavar="FILE",
         help="kiosk mode: show the line in FILE (why the control system last stopped) at start",
     )
+    ap.add_argument(
+        "--observe",
+        action="store_true",
+        help="read-only beside AXIS: sends nothing but the software estop (and the "
+        "link-fault estop), leaves LinuxCNC's error messages to AXIS, disables the other buttons",
+    )
     screens = [s[0] for s in VM.SCREENS]
     ap.add_argument(
         "--dump",
@@ -545,7 +586,7 @@ def _run(ap: argparse.ArgumentParser, args: argparse.Namespace, screens: list) -
                     args.dump, ", ".join(screens)
                 )
             )
-        session = build_session(args.profile, args.adapter, args.ini)
+        session = build_session(args.profile, args.adapter, args.ini, args.observe)
         vm = session.view(args.dump)
         sys.stdout.write(R.render_page(vm, _read_static("app.css"), _read_static("app.js")))
         return 0
@@ -553,7 +594,7 @@ def _run(ap: argparse.ArgumentParser, args: argparse.Namespace, screens: list) -
     code = serve(
         args.profile, args.host, args.port, args.adapter, args.boot_url,
         args.exit_if_linuxcnc_lost, args.exit_reason_file, args.ini,
-        args.startup_note_file,
+        args.startup_note_file, args.observe,
     )
     return code or 0
 

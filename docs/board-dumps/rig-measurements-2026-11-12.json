@@ -1,0 +1,273 @@
+{
+  "title": "Test-rig commissioning measurements",
+  "date": "2026-11-12",
+  "machine": "Test rig: 3-axis DIY wooden-frame router. Zhulong V2.0 board (Mesa 7i92 derivative, hm2_eth, HAL prefix hm2_7i92.0), TB6560 drivers, Japan Servo KH42KM2 NEMA 17 motors (200 steps/rev), LinuxCNC 2.9.10 live USB.",
+  "config": {
+    "ini": "configs/test-rig/test-rig.ini",
+    "hal": "configs/test-rig/test-rig.hal",
+    "program": "nc_files/faz8-kare.ngc"
+  },
+  "units": {
+    "position": "mm",
+    "velocity": "mm/s",
+    "acceleration": "mm/s^2",
+    "scale": "steps/mm",
+    "voltage": "V",
+    "step_timing": "ns",
+    "servo_thread_time": "ms"
+  },
+  "notes": "Raw numbers from the commissioning session on the rig, phases ('Faz') 1-8. Keys starting computed_ are arithmetic on the recorded numbers (formula given), not further measurements; keys ending _approx were recorded as 'about'. Axis keys are x, y, z. 'Session frame' = unhomed joint positions in that LinuxCNC session, before homing. 'Machine frame' = after homing: origin at the home switch's latch release edge, HOME_OFFSET 0. The INI comments cite this file as 'JSON'. The PC's LAN address is deliberately not recorded (deploy/machine.local, git-ignored).",
+
+  "faz1_y_dir": {
+    "notes": "Y has two motors on two TB6560 drivers. With both drivers on AXIS 1 (stepgen.01) neither ever changed direction: the 'Y DIR fault'. The levels compare the shared AXIS 1 with X's single-driver AXIS 0. Cause: one 3.3 V output cannot drive two optocouplers. Fix: Y's second driver moved to AXIS 3 = stepgen.03; the HAL end block mirrors stepgen.01's [JOINT_1] settings onto stepgen.03. Gate 1 passed.",
+    "board_output_logic_V": 3.3,
+    "wiring": {
+      "scheme": "common-cathode",
+      "board_5V_terminal": "unused",
+      "driver_CLK-_and_CW-": "GND",
+      "differs_from": "docs/09-tb6560-drivers.md:54-62 (common-anode)"
+    },
+    "levels_V": {
+      "dir_high": {
+        "axis0_x_one_driver": 3.11,
+        "axis1_y_two_drivers": 2.43
+      },
+      "dir_low": {"axis0_x_one_driver": 0.2},
+      "step_idle": {
+        "axis0_x_one_driver": 3.21,
+        "axis1_y_two_drivers": 2.55
+      }
+    },
+    "levels_notes": "dir_low was recorded only for X's single-driver AXIS 0 ('DIR low 0.2 V', next to the DIR-high comparison).",
+    "cause": "one 3.3 V output cannot drive two optocouplers",
+    "fix": {
+      "y_second_driver": "AXIS 3 = stepgen.03 (IO 10 Step, IO 11 Dir)",
+      "hostmot2_config": "num_stepgens=4 (configs/test-rig/test-rig.ini:193)",
+      "hal": "configs/test-rig/test-rig.hal end block: stepgen.03 gets stepgen.01's [JOINT_1] values, position command and enable"
+    },
+    "gate1": {
+      "passed": true,
+      "y_moves_both_ways": true,
+      "both_counters_equal": true
+    },
+    "axis3_is_stepgen3": {
+      "confirmed": true,
+      "evidence": "Faz 3 verification: both Y gantry sides moved about 50 mm",
+      "commanded_mm": 50.005,
+      "left_side_mm": 50.3,
+      "right_side_mm": 49.7
+    }
+  },
+
+  "faz2_directions": {
+    "notes": "Positive jog directions observed on the rig. All three SCALE values stay positive.",
+    "x_plus": "right",
+    "y_plus": "rear (away from the operator)",
+    "z_plus": "up"
+  },
+
+  "faz3_scale": {
+    "notes": "SCALE from commanded vs measured moves: new = previous x commanded_mm / measured_mm. The rough round ran on the GRBL-derived values, which were about 8.3x (X, Y) and 10.2x (Z) too high - they were never calibrated for these mechanics. Gate 3: within 1 %. Y was verified on both gantry sides (two motors, one joint).",
+    "formula": "new = previous * commanded_mm / measured_mm",
+    "grbl_scale": {
+      "x": 833.3,
+      "y": 823.5,
+      "z": 1250.0,
+      "source": "docs/board-dumps/grbl-eeprom-2026-08-03.json ($100-$102)"
+    },
+    "rough_round": {
+      "previous_scale": {"x": 833.3, "y": 823.5, "z": 1250.0},
+      "runs": [
+        {"axis": "x", "commanded_mm": 7.4225, "measured_mm": 62.4, "computed_scale": 99.121},
+        {"axis": "x", "commanded_mm": 7.0770, "measured_mm": 59.0, "computed_scale": 99.954},
+        {"axis": "y", "commanded_mm": 4.3610, "measured_mm": 36.0, "computed_scale": 99.758},
+        {"axis": "z", "commanded_mm": 1.5812, "measured_mm": 16.2, "computed_scale": 122.006}
+      ],
+      "interim_scale": {"x": 99.5, "y": 99.8, "z": 122.0}
+    },
+    "fine_round": {
+      "previous_scale": {"x": 99.5, "y": 99.8, "z": 122.0},
+      "runs": [
+        {"axis": "x", "commanded_mm": 49.6902, "measured_mm": 49.4, "computed_scale": 100.085},
+        {"axis": "y", "commanded_mm": 49.9873, "measured_mm": 50.6, "computed_scale": 98.592},
+        {"axis": "z", "commanded_mm": 25.2566, "measured_mm": 25.2, "computed_scale": 122.274}
+      ]
+    },
+    "final_scale": {"x": 100.085, "y": 98.592, "z": 122.274},
+    "computed_grbl_to_final_ratio": {"x": 8.326, "y": 8.353, "z": 10.223},
+    "verification_gate3": {
+      "tolerance_pct": 1.0,
+      "passed": true,
+      "runs": [
+        {"axis": "x", "commanded_mm": 50.026, "measured_mm": 49.8, "error_pct": -0.45},
+        {"axis": "y", "side": "left", "commanded_mm": 50.005, "measured_mm": 50.3, "error_pct": 0.59},
+        {"axis": "y", "side": "right", "commanded_mm": 50.005, "measured_mm": 49.7, "error_pct": -0.61},
+        {"axis": "z", "commanded_mm": 25.035, "measured_mm": 25.2, "error_pct": 0.66}
+      ]
+    }
+  },
+
+  "speeds": {
+    "notes": "Final INI values, raised on 2026-11-12 once SCALE was measured (from 3 mm/s and 10 mm/s^2). Why: with the old SCALE the rig had physically run at about 9 mm/s and about 84 mm/s^2 all day, and a homing search at 5 mm/s stops in 0.25 mm at 50 mm/s^2, against about 1.3 mm of switch overtravel. FERROR / MIN_FERROR raised tenfold: with the measured SCALE one step is about 0.01 mm and the old MIN_FERROR (0.005) was below it. Step timing unchanged: a runtime test with longer pulses changed nothing.",
+    "max_velocity": {"x": 10.0, "y": 10.0, "z": 5.0},
+    "max_acceleration": {"x": 50.0, "y": 50.0, "z": 50.0},
+    "stepgen_max_vel": {"x": 12.0, "y": 12.0, "z": 6.0},
+    "stepgen_max_acc": {"x": 60.0, "y": 60.0, "z": 60.0},
+    "max_linear_velocity": 10.0,
+    "default_linear_velocity": 3.0,
+    "ferror": 0.5,
+    "min_ferror": 0.05,
+    "previous": {
+      "source": "configs/test-rig/test-rig.ini as committed before 2026-11-12 (commit 94ede96), same on all three joints unless split",
+      "max_velocity": 3.0,
+      "max_acceleration": 10.0,
+      "stepgen_max_vel": 3.6,
+      "stepgen_max_acc": 12.0,
+      "max_linear_velocity": 3.0,
+      "default_linear_velocity": 1.0,
+      "ferror": 0.05,
+      "min_ferror": 0.005,
+      "home_search_vel": {"x": -2.0, "y": -2.0, "z": 2.0}
+    },
+    "step_timing_ns": {"steplen": 10000, "stepspace": 10000, "dirsetup": 50000, "dirhold": 50000},
+    "old_scale_physical_velocity_approx": 9,
+    "old_scale_physical_acceleration_approx": 84,
+    "homing_stop_distance_mm": 0.25,
+    "homing_stop_basis": "v^2 / (2 a) at 5 mm/s and 50 mm/s^2",
+    "switch_overtravel_mm_approx": 1.3
+  },
+
+  "faz4_travel": {
+    "notes": "Each axis was jogged onto its switches before homing; trip points are in the session frame, in which the table is at about 0. The machine frame puts the origin at the home switch's latch release edge (HOME_OFFSET 0). The release edges were estimated by polling and include its latency; homing later showed only small switch hysteresis (Z trip to release about 0.06 mm). Every soft limit is at least 3.3 mm inside a switch trip or the table. The Y two-side racking check was deferred.",
+    "session_frame": {
+      "x": {"left_trip": -287.93, "left_trip_approaches": 3, "left_trip_repeat_within_mm": 0.03, "right_trip": 115.43, "trip_to_trip_mm": 403.4},
+      "y": {"front_trip": -271.82, "rear_trip": 119.53, "trip_to_trip_mm": 391.3},
+      "z": {"top_trip": 100.32, "top_release": 99.79, "table_approx": 0.0, "top_switch_to_table_mm_approx": 100}
+    },
+    "machine_frame": {
+      "x": {"min_trip": -0.64, "max_trip": 402.72},
+      "y": {"min_trip": -0.67, "max_trip": 390.68},
+      "z": {"top_trip": 0.52, "table_approx": -99.8}
+    },
+    "soft_limits": {
+      "x": {"min_limit": 3.0, "max_limit": 399.0, "usable_mm": 396.0},
+      "y": {"min_limit": 3.0, "max_limit": 387.0, "usable_mm": 384.0},
+      "z": {"min_limit": -96.5, "max_limit": -3.0, "usable_mm": 93.5}
+    },
+    "computed_margins_mm": {
+      "x": {"min_side": 3.64, "max_side": 3.72},
+      "y": {"min_side": 3.67, "max_side": 3.68},
+      "z": {"to_table": 3.3, "to_top_trip": 3.52}
+    },
+    "minimum_margin_mm": 3.3,
+    "y_racking_check": "deferred"
+  },
+
+  "faz5_switches": {
+    "notes": "Nets at configs/test-rig/test-rig.hal:301-327. Inputs idle HIGH and read LOW when pressed, so the nets use .in_not. With the machine ON, each switch pressed by hand tripped 'joint N on limit switch error' with N = error_joint. The machine refuses to enable while a joint rests on a limit. LinuxCNC 2.9 clears Override Limits as soon as motion is next in position, so recovering from a limit needs an immediate jog off.",
+    "passed": true,
+    "polarity": {"idle": "HIGH", "pressed": "LOW", "hal_pin": ".in_not"},
+    "map": [
+      {"pin": "hm2_7i92.0.gpio.021", "io": 21, "switch": "X left", "connected_to": ["joint.0.home-sw-in", "joint.0.neg-lim-sw-in"], "error_joint": 0},
+      {"pin": "hm2_7i92.0.gpio.020", "io": 20, "switch": "X right", "connected_to": ["joint.0.pos-lim-sw-in"], "error_joint": 0},
+      {"pin": "hm2_7i92.0.gpio.023", "io": 23, "switch": "Y front", "connected_to": ["joint.1.home-sw-in", "joint.1.neg-lim-sw-in"], "error_joint": 1},
+      {"pin": "hm2_7i92.0.gpio.022", "io": 22, "switch": "Y rear", "connected_to": ["joint.1.pos-lim-sw-in"], "error_joint": 1},
+      {"pin": "hm2_7i92.0.gpio.024", "io": 24, "switch": "Z top", "connected_to": ["joint.2.home-sw-in", "joint.2.pos-lim-sw-in"], "error_joint": 2}
+    ],
+    "z_bottom_switch": false,
+    "enable_refused_on_limit": true
+  },
+
+  "faz6_homing": {
+    "notes": "Home All runs Z -> Y -> X. Single joint: Machine -> Homing -> Home <axis>, or select the axis and press the Home key; the Manual-tab button is Home All. Repeatability is read from joint.N.motor-offset, because the DRO always reads HOME after homing. Before an intermittent X motor-cable contact was repaired, X drifted one way (lost steps); after the repair 0.0017 mm.",
+    "passed": true,
+    "order": ["z", "y", "x"],
+    "repeatability_motor_offset_mm": {"z": 0.0001, "y": 0.030, "x": 0.0017},
+    "x_before_cable_repair_drift_mm": [0.047, 0.132],
+    "z_trip_to_release_mm_approx": 0.06,
+    "ini": {
+      "home_search_vel": {"x": -5.0, "y": -5.0, "z": 4.0},
+      "home_latch_vel": {"x": 0.2, "y": 0.2, "z": -0.2},
+      "home": {"x": 5.0, "y": 5.0, "z": -5.0},
+      "home_offset": {"x": 0.0, "y": 0.0, "z": 0.0},
+      "home_ignore_limits": "YES",
+      "home_sequence": {"z": 0, "y": 1, "x": 2}
+    }
+  },
+
+  "faz7_soft_limits": {
+    "notes": "MDI moves beyond the soft limits, all at F300, were rejected by motion and no axis moved.",
+    "passed": true,
+    "mdi": ["G1 X999", "G1 X-50", "G1 Y999", "G1 Y-50", "G1 Z10", "G1 Z-200"],
+    "feed": "F300",
+    "messages": [
+      "Linear move on line N would exceed joint J's positive/negative limit",
+      "invalid params in linear command"
+    ],
+    "source": [
+      "reference/linuxcnc/src/emc/motion/command.c:261-267",
+      "reference/linuxcnc/src/emc/motion/command.c:1003"
+    ],
+    "any_axis_moved": false
+  },
+
+  "faz8_first_program": {
+    "notes": "A 50 mm square at F300 from X10 Y10, cut in the air. Z moves use G53: the G54 offsets are zero and the Z window is -96.5..-3, so a 'G0 Z5' would be refused. Accepted with an open item: after 3 runs the homing motor-offsets showed Z drifting slightly in one direction, about 0.02 mm per run. Suspected cause: Z acceleration 50 mm/s^2 too high against gravity. Work item: try 25 mm/s^2 and repeat.",
+    "program": "nc_files/faz8-kare.ngc",
+    "square_mm": 50,
+    "feed_mm_per_min": 300,
+    "start_xy": [10, 10],
+    "runs_error_free": 4,
+    "hm2_packet_errors": 0,
+    "step_loss_check": {
+      "after_runs": 3,
+      "method": "homing, joint.N.motor-offset",
+      "motor_offset_shift_mm": {"y": 0.0001, "x": 0.036, "z": 0.066}
+    },
+    "z_drift_mm_per_run_approx": 0.02,
+    "accepted": true,
+    "open_item": "Z drift: try MAX_ACCELERATION 25 mm/s^2 on Z and repeat the runs"
+  },
+
+  "operations": {
+    "notes": "Session findings that are not measurements of the machine.",
+    "orphaned_shm": {
+      "symptom": "after a TERM shutdown the next start fails: AXIS 'A configuration error is preventing LinuxCNC from starting' (s.joints timeout)",
+      "segment": {"kind": "SysV shared memory, motion", "key": "0x00000064", "nattch": 0},
+      "fix": "with no LinuxCNC process running, ipcrm that segment before starting; done by deploy/kiosk-session, which runs deploy/kiosk.sh clean-shm before every LinuxCNC start"
+    },
+    "boot_after_power_cut": {
+      "notes": "After a building power cut the PC boots usably only in GRUB failsafe mode. In normal mode the screen goes black after the desktop background; the persistence (/dev/sda2, ext3) is clean. The monitor is on the AMD iGPU (HDMI); an NVIDIA GA102 is also present. Failsafe latency beat the earlier normal-mode multi-core value; opening Firefox on the single core raised it.",
+      "failsafe_kernel_params": "noapic noapm nodma nomce nosmp nosplash vga=788",
+      "failsafe_cpus": 1,
+      "servo_thread_tmax_ms": {
+        "failsafe_approx": 0.52,
+        "failsafe_with_firefox_open": 1.25,
+        "earlier_normal_mode_multicore": 3.4
+      },
+      "hm2_packet_errors_failsafe": 0
+    },
+    "network": {
+      "notes": "The USB Wi-Fi dongle drops often and the PC's address changed. The access point rewrites client MACs, so ARP cannot identify the PC: use the hostname 'debian'."
+    },
+    "hal_warnings": {
+      "notes": "Printed at every LinuxCNC start, successful starts included. Cause unknown, apparently harmless.",
+      "messages": [
+        "HAL: ERROR: pin_new(hm2_7i92.0.gpio.000.in_not)",
+        "(gpio.001.in) called with already-initialized memory"
+      ]
+    }
+  },
+
+  "open_items": [
+    "Z acceleration drift (faz8_first_program)",
+    "X motor cable durability (faz6_homing)",
+    "Y two-side racking check (faz4_travel)",
+    "normal-mode black screen (GPU / boot)",
+    "Wi-Fi dongle reliability, or wired LAN",
+    "UI defects and an observer mode",
+    "BIOS / latency tuning (failsafe parameters gave better latency)",
+    "the gpio.000/001 pin_new warning",
+    "the kiosk is not installed yet"
+  ]
+}

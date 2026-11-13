@@ -52,6 +52,22 @@ TB6560_STEP_CEILING_HZ = 15000.0
 DOCUMENTED_HOME_ORDER = "Z → Y → X"
 DOCUMENTED_HOME_ORDER_SOURCES = ("docs/DURUM.md", "docs/MERMER-GECIS.md")
 
+#: Observer mode (app.py --observe): the UI runs beside AXIS, which runs the
+#: machine, and sends nothing but the software estop. Every screen opens
+#: with the banner, and every other control is off with OBSERVE_REASON.
+OBSERVE_BANNER = "SALT İZLEME — makine AXIS'ten kullanılıyor"
+OBSERVE_DETAIL = (
+    "Bu ekrandan yalnız acil stop gider: «Yazılım acil stop» düğmesiyle, bir de "
+    "kart bağlantısı koparsa kendiliğinden. Diğer düğmeler kapalı."
+)
+OBSERVE_REASON = "Salt izleme — makine AXIS'ten kullanılıyor, bu ekrandan komut gönderilmez."
+#: LinkHealth.problems_with's step in observer mode, which has no «Yazılım
+#: sıfırla» to press (adapter.OBSERVE_LINK_ACTION gives the reason).
+OBSERVE_LINK_RESET_STEP = (
+    "sonra LinuxCNC'yi yeniden başlatın (salt izlemede bu ekran kart "
+    "bağlantısını sıfırlayamaz)"
+)
+
 
 # ---------------------------------------------------------------------------
 # Capabilities
@@ -113,7 +129,16 @@ def _reading_severity(value: Any, fault: bool) -> str:
     return Severity.ERROR.value if fault else Severity.INFO.value
 
 
-def link_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
+def _link_problems(state: MachineState, observe: bool) -> List[str]:
+    """LinkHealth.problems, with observer mode's step after a lost link."""
+    if observe:
+        return state.link.problems_with(OBSERVE_LINK_RESET_STEP)
+    return state.link.problems
+
+
+def link_panel(
+    state: MachineState, config: MachineConfig, observe: bool = False
+) -> Dict[str, Any]:
     """Connection health.
 
     Carries the two indicators the prototype omitted and commissioning actually
@@ -170,11 +195,11 @@ def link_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
     return {
         "rows": rows,
         "healthy": link.healthy,
-        "problems": link.problems,
+        "problems": _link_problems(state, observe),
     }
 
 
-def estop_panel(state: MachineState) -> Dict[str, Any]:
+def estop_panel(state: MachineState, observe: bool = False) -> Dict[str, Any]:
     """Two distinct states, never merged.
 
     `drive_power` is hardware. `software` is LinuxCNC. The reset button may only
@@ -184,6 +209,11 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
     While LinuxCNC's status is unknown the software row says "bilinmiyor":
     the software state is LinuxCNC's, and it could not be read. Drive power
     comes from a HAL pin and keeps its own reading.
+
+    In observer mode the reset is off too (the machine is reset in AXIS);
+    the estop button never is. `reset_blocked_reason` stays the hardware
+    one, which the screen shows as a banner; `reset_disabled_reason` is
+    whichever reason the button gives.
     """
     e = state.estop
     if not state.status_known:
@@ -194,6 +224,11 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
         software_severity = (
             Severity.ERROR.value if e.software_disabled else Severity.INFO.value
         )
+    blocked = (
+        "Sürücü gücü donanımsal kesik — yazılım sıfırlaması etkisiz."
+        if e.drive_power is DrivePower.CUT
+        else ""
+    )
     return {
         "drive_power": e.drive_power.value,
         "drive_power_label": e.drive_power_label,
@@ -211,12 +246,9 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
         "software_severity": software_severity,
         # The whole point of the panel:
         "reset_clears_drive_power": False,
-        "reset_enabled": e.drive_power is not DrivePower.CUT,
-        "reset_blocked_reason": (
-            "Sürücü gücü donanımsal kesik — yazılım sıfırlaması etkisiz."
-            if e.drive_power is DrivePower.CUT
-            else ""
-        ),
+        "reset_enabled": e.drive_power is not DrivePower.CUT and not observe,
+        "reset_blocked_reason": blocked,
+        "reset_disabled_reason": blocked or (OBSERVE_REASON if observe else ""),
         "note": (
             "Acil stop sürücü gücünü DONANIMSAL keser. LinuxCNC sadece haberdar "
             "olur; yazılım güvenlik fonksiyonu değildir."
@@ -224,8 +256,10 @@ def estop_panel(state: MachineState) -> Dict[str, Any]:
     }
 
 
-def homing_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
-    """The homing gate.
+def homing_panel(
+    state: MachineState, config: MachineConfig, observe: bool = False
+) -> Dict[str, Any]:
+    """The homing gate. Its button is off in observer mode (`home_enabled`).
 
     HOME_IGNORE_LIMITS is a config fact, so it is read from the config where
     the INI has the joint: AxisConfig also keeps the raw text, which the
@@ -292,6 +326,8 @@ def homing_panel(state: MachineState, config: MachineConfig) -> Dict[str, Any]:
         "shares_home_and_limit": shares_switch,
         "ignore_limits_unknown": bool(unreadable),
         "shares_warning": " ".join(warning),
+        "home_enabled": not observe,
+        "home_disabled_reason": OBSERVE_REASON if observe else "",
     }
 
 
@@ -324,8 +360,12 @@ def homing_order_note(
     )
 
 
-def gate_panel(state: MachineState, config: MachineConfig, profile: MachineProfile) -> Dict[str, Any]:
-    """Why the program cannot start, and what is merely risky."""
+def gate_panel(
+    state: MachineState, config: MachineConfig, profile: MachineProfile, observe: bool = False
+) -> Dict[str, Any]:
+    """Why the program cannot start, and what is merely risky. It describes
+    the machine, so observer mode changes only what a lost link asks for
+    (_link_problems): the program itself is then started from AXIS."""
     warnings: List[str] = []
     if not config.present:
         warnings.append(config.absence_reason)
@@ -335,8 +375,7 @@ def gate_panel(state: MachineState, config: MachineConfig, profile: MachineProfi
         )
     for m in profile.missing_switches:
         warnings.append(m.consequence)
-    if state.link.problems:
-        warnings.extend(state.link.problems)
+    warnings.extend(_link_problems(state, observe))
     if profile.platform.latency_us is None:
         warnings.append(
             "Gecikme (jitter) ölçülmedi — {}.".format(profile.platform.latency_note)
@@ -385,7 +424,10 @@ def feed_chips(config: MachineConfig) -> List[Dict[str, Any]]:
 
 
 def control_screen(
-    profile: MachineProfile, config: MachineConfig, state: MachineState
+    profile: MachineProfile,
+    config: MachineConfig,
+    state: MachineState,
+    observe: bool = False,
 ) -> Dict[str, Any]:
     """The Kontrol screen.
 
@@ -397,6 +439,10 @@ def control_screen(
     The WCS and feed chips stay as buttons; the jog step is the UI's own
     setting, not a LinuxCNC reading. `jog_disabled_reason` says why jog is
     off without claiming the machine is off when that is not known.
+
+    In observer mode every control but the software estop is off, with
+    OBSERVE_REASON: jog, the feed chips and MDI through their own flags,
+    the WCS and jog-step chips through `commands_enabled`.
     """
     known = state.status_known
     if known:
@@ -417,6 +463,9 @@ def control_screen(
                 "travel_measured": bool(ac and ac.travel.measured),
             }
         )
+    feeds = feed_chips(config)
+    if observe:
+        feeds = [dict(f, enabled=False, reason=OBSERVE_REASON) for f in feeds]
     return {
         "status_known": known,
         "axes": axes,
@@ -424,15 +473,19 @@ def control_screen(
         "wcs_options": ["G54", "G55", "G56"],
         "jog_steps": [0.01, 0.1, 1.0, 10.0, 50.0],
         "jog_step": state.jog_step_mm,
-        "feed_overrides": feed_chips(config),
+        "feed_overrides": feeds,
         "feed_override": state.feed_override_pct if known else None,
-        "can_jog": state.can_jog,
-        "jog_disabled_reason": _motion_off_reason(state, "jog kapalı"),
-        "estop": estop_panel(state),
-        "homing": homing_panel(state, config),
-        "gate": gate_panel(state, config, profile),
+        "can_jog": state.can_jog and not observe,
+        "jog_disabled_reason": (
+            OBSERVE_REASON if observe else _motion_off_reason(state, "jog kapalı")
+        ),
+        "commands_enabled": not observe,
+        "commands_disabled_reason": OBSERVE_REASON if observe else "",
+        "estop": estop_panel(state, observe),
+        "homing": homing_panel(state, config, observe),
+        "gate": gate_panel(state, config, profile, observe),
         "capabilities": capabilities_for_screen(profile, "kontrol"),
-        "mdi": mdi_panel(state),
+        "mdi": mdi_panel(state, config, observe),
         "tiles": control_tiles(profile, config, state),
     }
 
@@ -497,12 +550,53 @@ def _motion_off_reason(state: MachineState, consequence: str) -> str:
     return "Makine devre dışı — {}.".format(consequence)
 
 
-def mdi_panel(state: MachineState) -> Dict[str, Any]:
-    """Free text entry plus history. The prototype had presets only."""
+def _gcode_number(value: float) -> Optional[str]:
+    """`value` as a G-code number that reads back as exactly `value`, or None.
+
+    The shortest round-trip form (repr), with "-3.0" written "-3". The
+    G-code reader takes signs, digits and a point, no exponent
+    (read_real_number, src/emc/rs274ngc/interp_read.cc:2740-2746), so a
+    value repr writes with an exponent (|value| < 1e-4 or >= 1e16) gives
+    None, as do inf and nan.
+    """
+    text = repr(float(value))
+    if "e" in text or "n" in text:
+        return None
+    return text[:-2] if text.endswith(".0") else text
+
+
+def mdi_presets(config: MachineConfig) -> List[str]:
+    """The MDI preset chips: only commands LinuxCNC accepts on this machine.
+
+    The one Z move is a G53 (machine-coordinate) move to the top of Z's
+    soft-limit window, the INI's MAX_LIMIT, so no work offset can carry it
+    out of range. Motion accepts a target on a limit and refuses one beyond
+    it (inRange, src/emc/motion/command.c:259-268). It needs measured
+    travel: without an INI (the marble profile) or with provisional limits
+    there is no window, and no Z move is offered. The prototype's "G0 Z5"
+    and "G53 G0 Z0" lie above the test rig's window (its G54 offsets are
+    zero), so motion refuses both there.
+    """
+    presets: List[str] = []
+    z = config.axis("Z")
+    if z is not None and z.travel.has_crash_protection and z.travel.max_limit is not None:
+        top = _gcode_number(z.travel.max_limit)
+        if top is not None:
+            presets.append("G53 G0 Z{}".format(top))
+    return presets + ["M5", "G92.1"]
+
+
+def mdi_panel(
+    state: MachineState, config: MachineConfig, observe: bool = False
+) -> Dict[str, Any]:
+    """Free text entry plus history. The prototype had presets only; these
+    come from mdi_presets. Off in observer mode."""
     return {
-        "enabled": state.can_jog,
-        "disabled_reason": _motion_off_reason(state, "MDI kabul edilmiyor"),
-        "presets": ["G0 Z5", "G53 G0 Z0", "M5", "G92.1"],
+        "enabled": state.can_jog and not observe,
+        "disabled_reason": (
+            OBSERVE_REASON if observe else _motion_off_reason(state, "MDI kabul edilmiyor")
+        ),
+        "presets": mdi_presets(config),
         "history": [
             {"command": e.command, "accepted": e.accepted, "note": e.note}
             for e in reversed(state.mdi_history[-12:])
@@ -512,28 +606,42 @@ def mdi_panel(state: MachineState) -> Dict[str, Any]:
 
 
 def program_screen(
-    profile: MachineProfile, config: MachineConfig, state: MachineState
+    profile: MachineProfile,
+    config: MachineConfig,
+    state: MachineState,
+    observe: bool = False,
 ) -> Dict[str, Any]:
-    """Program list is empty by design: no .ngc files exist in the repo.
+    """Program list is empty by design: the program directory is not read
+    yet, and no action loads a file (Session.act never calls load_program),
+    so there is nothing to pick here. The reason must not call the directory
+    empty: the test rig's (nc_files/) holds the Faz 8 program.
 
     The prototype shipped five invented filenames with invented line counts and
     run times. None of that traces to anything, so none of it is carried over.
 
     The loaded file and the run state come from LinuxCNC's status, so they
     are None while it is unknown.
+
+    In observer mode start and stop are off: programs run from AXIS.
     """
     known = state.status_known
+    gate = gate_panel(state, config, profile, observe)
     return {
         "files": [],
         "files_empty_reason": (
-            "Program dizini tanımlı değil ve depoda .ngc dosyası yok. "
+            "Program dizini henüz okunmuyor, bu ekrandan dosya yüklenemez. "
             "PROGRAM_PREFIX = ../../nc_files/ (test-rig.ini)"
         ),
         "loaded": state.program_file if known else None,
         "running": state.program_running if known else None,
         "progress_pct": round(state.program_progress * 100, 1) if known else None,
-        "gate": gate_panel(state, config, profile),
-        "can_start": state.can_start_program,
+        "gate": gate,
+        "can_start": state.can_start_program and not observe,
+        "start_disabled_reason": (
+            OBSERVE_REASON if observe else (gate["headline"] or "Program yüklenmedi")
+        ),
+        "stop_enabled": not observe,
+        "stop_disabled_reason": OBSERVE_REASON if observe else "",
         "capabilities": capabilities_for_screen(profile, "program"),
     }
 
@@ -629,10 +737,38 @@ def tools_screen(profile: MachineProfile, config: MachineConfig) -> Dict[str, An
     }
 
 
+#: An input's live state (MachineState.input_values) as the Alarmlar screen
+#: shows it: (state, label, severity). "unread": the adapter reads no inputs
+#: (MockAdapter), so nothing is claimed - muted, not WARN. "unknown": it
+#: tried and the pin did not answer, WARN as any unreadable value
+#: (_reading_severity). A pressed switch is WARN: with the machine ON it is
+#: a limit error, and the machine refuses to enable on one.
+_INPUT_STATES = {
+    "unread": ("—", ""),
+    "unknown": ("okunamadı", Severity.WARN.value),
+    "pressed": ("basılı", Severity.WARN.value),
+    "free": ("serbest", Severity.INFO.value),
+}
+
+
+def _input_state(state: MachineState, hal_pin: str) -> str:
+    if not state.input_values:
+        return "unread"
+    value = state.input_value(hal_pin)
+    if value is None:
+        return "unknown"
+    return "pressed" if value else "free"
+
+
 def alarms_screen(profile: MachineProfile, state: MachineState) -> Dict[str, Any]:
-    """Inputs and the event log, both with source attribution."""
+    """Inputs and the event log, both with source attribution.
+
+    Each input carries its live state, read from the pin the HAL nets take
+    (profiles.DigitalInput.hal_pin), where TRUE means pressed whichever way
+    the input idles (_INPUT_STATES)."""
     inputs = []
     for inp in profile.inputs:
+        live = _input_state(state, inp.hal_pin)
         inputs.append(
             {
                 "pin": inp.pin,
@@ -648,6 +784,9 @@ def alarms_screen(profile: MachineProfile, state: MachineState) -> Dict[str, Any
                 # Read-only: the prototype made these clickable toggles, but an
                 # input is something the machine tells us, not something we set.
                 "read_only": True,
+                "state": live,
+                "state_label": _INPUT_STATES[live][0],
+                "state_severity": _INPUT_STATES[live][1],
             }
         )
     missing = [
@@ -676,6 +815,12 @@ def alarms_screen(profile: MachineProfile, state: MachineState) -> Dict[str, Any
             if not inputs
             else ""
         ),
+        "inputs_live": bool(state.input_values),
+        "inputs_live_note": (
+            "Durum canlı: her saniye HAL'den okunur (basılı = switch tetiklenmiş)."
+            if state.input_values
+            else "Canlı durum okunmuyor — bu adaptör HAL girişlerini okumuyor."
+        ),
         "missing_switches": missing,
         "events": events,
         "active_count": sum(
@@ -685,12 +830,84 @@ def alarms_screen(profile: MachineProfile, state: MachineState) -> Dict[str, Any
     }
 
 
+def _ns(value: Optional[int]) -> str:
+    """Nanoseconds as TimingConfig.rows writes them ("10 000"), "—" unread."""
+    return "—" if value is None else "{:,}".format(value).replace(",", " ")
+
+
+def _stepgen_runs(items: List[Any]) -> str:
+    """Per-stepgen values, a run of equal neighbours written once:
+    "00–02: 10 000 · 03: 20 000 ns"."""
+    runs: List[List[Any]] = []
+    for _, index, value in items:
+        if runs and runs[-1][2] == value:
+            runs[-1][1] = index
+        else:
+            runs.append([index, index, value])
+    return " · ".join(
+        "{}{}: {}".format(first, "" if last == first else "–" + last, _ns(value))
+        for first, last, value in runs
+    ) + " ns"
+
+
+def timing_live_rows(config: MachineConfig, state: MachineState) -> List[Dict[str, Any]]:
+    """The step timing the driver runs (MachineState.stepgen_timing), one row
+    per parameter over every stepgen read, for the card that shows the INI's
+    (TimingConfig.rows). [] when nothing was read.
+
+    One value when every stepgen has the same, else each stepgen's. WARN,
+    with a note, when a value could not be read, when the stepgens differ,
+    or when the value differs from the INI's on that card: the INI then no
+    longer says what runs (a halcmd setp since LinuxCNC started, or a value
+    the driver reset).
+    """
+    groups: Dict[str, List[Any]] = {}
+    for name, value in state.stepgen_timing:
+        # "<prefix>.stepgen.NN.<param>", as adapter._stepgen_timing_names builds it
+        base, _, param = name.rpartition(".")
+        head, _, index = base.rpartition(".")
+        groups.setdefault(param, []).append((head, index, value))
+    ini = config.timing._asdict() if config.timing else {}
+    rows = []
+    for param, items in groups.items():
+        values = [v for _, _, v in items]
+        known = {v for v in values if v is not None}
+        expected = ini.get(param + "_ns")
+        notes = []
+        if None in values:
+            notes.append("okunamadı: " + ", ".join(
+                "stepgen.{}".format(i) for _, i, v in items if v is None))
+        if len(known) > 1:
+            notes.append("stepgen'ler aynı değerde değil")
+        if expected is not None and known and known != {expected}:
+            notes.append("INI'de {} ns".format(_ns(expected)))
+        if len(set(values)) == 1:
+            value = "—" if values[0] is None else "{} ns".format(_ns(values[0]))
+        else:
+            value = _stepgen_runs(items)
+        first, last = items[0], items[-1]
+        rows.append({
+            "label": param,
+            "value": value,
+            "severity": Severity.WARN.value if notes else Severity.INFO.value,
+            "hal": "{}.{}{}.{}".format(
+                first[0], first[1], "–" + last[1] if len(items) > 1 else "", param
+            ),
+            "note": "; ".join(notes),
+        })
+    return rows
+
+
 def machine_screen(
-    profile: MachineProfile, config: MachineConfig, state: MachineState
+    profile: MachineProfile,
+    config: MachineConfig,
+    state: MachineState,
+    observe: bool = False,
 ) -> Dict[str, Any]:
     board = profile.board
     plat = profile.platform
-    link = link_panel(state, config)
+    link = link_panel(state, config, observe)
+    timing_live = timing_live_rows(config, state)
     axes = [
         {
             "axis": a.axis,
@@ -757,6 +974,12 @@ def machine_screen(
         ),
         "axes": axes,
         "timing_rows": config.timing.rows() if config.timing else [],
+        "timing_live_rows": timing_live,
+        "timing_live_note": (
+            "Sürücünün kullandığı değerler, her saniye HAL'den okunur."
+            if timing_live
+            else "Canlı değer okunmuyor — HAL okunmuyor ya da INI'de num_stepgens yok."
+        ),
         "timing_note": (
             "TB6560 optokuplörleri için hesaplandı (docs/09). Sürücü değişirse "
             "bu değerler geçersiz."
@@ -785,8 +1008,10 @@ def build(
     config: MachineConfig,
     state: MachineState,
     screen: str = "kontrol",
+    observe: bool = False,
 ) -> Dict[str, Any]:
-    """The whole view model for one render."""
+    """The whole view model for one render. `observe`: observer mode
+    (app.Session), the banner and every control but the estop off."""
     alarms = alarms_screen(profile, state)
     return {
         "profile": {
@@ -810,11 +1035,16 @@ def build(
             "severity": state.status_severity.value,
             "message": state.message,
         },
-        "link": link_panel(state, config),
-        "kontrol": control_screen(profile, config, state),
-        "program": program_screen(profile, config, state),
+        "observe": {
+            "active": observe,
+            "banner": OBSERVE_BANNER if observe else "",
+            "detail": OBSERVE_DETAIL if observe else "",
+        },
+        "link": link_panel(state, config, observe),
+        "kontrol": control_screen(profile, config, state, observe),
+        "program": program_screen(profile, config, state, observe),
         "probing": probing_screen(profile),
         "takimlar": tools_screen(profile, config),
         "alarmlar": alarms,
-        "makine": machine_screen(profile, config, state),
+        "makine": machine_screen(profile, config, state, observe),
     }

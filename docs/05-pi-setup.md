@@ -11,10 +11,10 @@ network. Board bring-up itself is [02-board-bringup.md](02-board-bringup.md).
 >
 > | | Originally planned | **Actually running** |
 > |---|---|---|
-> | Host | Raspberry Pi 4 | **Monster laptop, LinuxCNC live USB + 10 GB persistence** |
+> | Host | Raspberry Pi 4 | **LinuxCNC live USB + 10 GB persistence, on whichever PC it is plugged into (2026-08: a Monster laptop; 2026-11-12: an MSI desktop)** |
 > | Architecture | arm64 | **amd64** |
 > | Kernel | preempt-rt arm64 | **`6.12.95+deb13-rt-amd64` (PREEMPT_RT)** |
-> | NIC | Pi built-in | **`enp3s0` (Realtek RTL8125, 100 Mbps Full)** |
+> | NIC | Pi built-in | **the PC's wired port, named per PC (Monster: `enp3s0`, Realtek RTL8125, 100 Mbps Full; MSI desktop: `enp12s0`, RTL8125B)** |
 >
 > Source: [DURUM.md:20-27](DURUM.md).
 >
@@ -439,7 +439,7 @@ ip -brief address show
 
 Gone on reboot. Correct for bring-up — do not commit to a scheme before Q3 is answered.
 (2026-10-18: the `10.10.10.x` scheme is in use. On the live USB this temporary form, with
-`enp3s0` in place of `eth0`, is the per-boot step when persistence does not keep the
+the PC's wired port in place of `eth0` (`enp3s0` on the Monster, `enp12s0` on the MSI desktop), is the per-boot step when persistence does not keep the
 address — [DURUM.md:29-33](DURUM.md).)
 
 #### Persistent — NetworkManager

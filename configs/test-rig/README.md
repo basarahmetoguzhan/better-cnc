@@ -1,29 +1,34 @@
 # test-rig — Phase 1.5 config
 
-Draft LinuxCNC configuration for the small 3-axis DIY router used to prove the
-PC + Zhulong control chain before the marble machine (a Windows laptop booted from the
-LinuxCNC 2.9.10 live USB, amd64 PREEMPT_RT kernel — not a Pi; see docs/DURUM.md).
+LinuxCNC configuration for the small 3-axis DIY router used to prove the PC + Zhulong
+control chain before the marble machine (a PC booted from the LinuxCNC 2.9.10 live USB,
+amd64 PREEMPT_RT kernel — not a Pi; since 2026-11-12 an MSI desktop, before that a Windows
+laptop; see docs/DURUM.md:21).
 
 ---
 
-## 🟡 Runs and jogs — Y DIR fault, scale, travel, switch nets and homing still to do
+## ✅ Measured on the rig — Y DIR fixed; scale, travel, switch nets and homing done
 
-**Updated 2026-10-18.** The board has been detected and fully interrogated, and the config
-has been run: `hm2_eth` loads cleanly, the machine enables, all three axes jog — Y in one
-direction only, an open DIR fault (docs/DURUM.md). Five of the eight original assumptions
-were resolved from the dumps and a sixth (A7, polarity) by hand; A6 is resolved for X and Z
-but open for Y, and A5 is open — both about the *machine*, not the controller.
+**Updated 2026-11-12.** Phases 1–8 of the test-rig plan ran on the machine on 2026-11-12,
+and every number they produced is recorded in
+[`docs/board-dumps/rig-measurements-2026-11-12.json`](../../docs/board-dumps/rig-measurements-2026-11-12.json)
+(cited below as *the JSON*). The Y DIR fault is fixed (Y's second driver moved to its own
+output, AXIS 3 = `stepgen.03`), the axis directions are known, `SCALE` and travel are
+measured, the switch nets are connected, homing works and repeats, moves past the soft
+limits are refused, and a first program (`nc_files/faz8-kare.ngc`) ran four times without
+an error. All eight original assumptions are resolved; no `ASSUMPTION` marker is left.
 
 | | |
 |---|---|
-| **Board side** | ✅ **VERIFIED** — prefix, module inventory, stepgen mapping, IO numbers, clock |
-| **Machine side** | 🟡 **PARTLY VERIFIED** — all three axes jog (Y one way only — DIR fault open); switch locations and polarity (`.in_not`) verified by hand. Still unverified: scale, travel limits, homing directions, Y's + end |
+| **Board side** | ✅ **VERIFIED** — prefix, module inventory, stepgen mapping (StepGen 3 = AXIS 3 included), IO numbers, clock |
+| **Machine side** | ✅ **MEASURED 2026-11-12** — directions, `SCALE` (verified within 1 %), travel and soft limits, switch nets, homing, soft-limit refusal, first program. Still open, none of them a marker: Z drifts ~0.02 mm per run, the Y two-side racking check, X motor-cable durability |
 
 Dumps this is based on, both in `docs/board-dumps/`:
 
 ```
 readhmid-10.10.10.10-2026-08-05.txt     IDROM, module inventory, pin-out by connector
 printpd-10.10.10.10-2026-08-05.txt      raw pin descriptors, all 34 pins
+rig-measurements-2026-11-12.json        the machine: voltages, scale, travel, switches, homing
 ```
 
 Readable pin map: **[docs/10-7i92-pinout-verified.md](../../docs/10-7i92-pinout-verified.md)**
@@ -48,20 +53,28 @@ What actually changed:
 The 34-pin geometry means docs 03 and 04, and parts of 08, described a board we do not
 have. They are corrected/superseded rather than deleted — see the docs index.
 
-### First run — done
+### Commissioning — done (2026-11-12)
 
-The config has been run (docs/DURUM.md): `hm2_eth` loads cleanly (0 packet errors in a
-10 s check), the machine enables, all three axes jog (Y one way only — see above). The motors are
-now coupled to the mechanics (docs/PLAN-BUGUN.md:397), so the protections listed below no
-longer apply: `SCALE` is unverified, Y's direction is unknown and no limits are wired, and a
-wrong value now drives the gantry, not a bare shaft. Until docs/PLAN-BUGUN.md phases 1–4
-pass, jog in short, slow moves with a hand on the power switch. The plan was to run it first
-with the motors uncoupled, for these reasons:
+The config has run since 2026-08 (docs/DURUM.md) and was commissioned on the rig on
+2026-11-12. The motors are coupled to the mechanics, so know what protects what:
 
-- A wrong `SCALE` spins a motor, not a gantry into its frame.
-- A wrong direction sign is something you *observe* rather than something that breaks a
-  switch.
-- A stepgen mapped to an unexpected axis is obvious and harmless.
+- The soft limits act **only after homing**. Until then LinuxCNC bounds a jog only to
+  ±(full range) around the current position (`command.c:153-174`).
+- Before homing, X and Y stop on their switches at both ends and Z on its top switch.
+  **Nothing protects the table below Z** until Z is homed — there is no bottom switch.
+- With the machine ON, a pressed switch trips `joint N on limit switch error`, and the
+  machine will not enable while a joint rests on a limit. To get off one: Override Limits,
+  then jog off **at once** — LinuxCNC 2.9 clears the override as soon as motion is next in
+  position.
+
+### Known start problem: an orphaned shared-memory segment
+
+After a TERM shutdown LinuxCNC sometimes leaves its motion SysV shared-memory segment
+behind (key `0x00000064`, `nattch` 0). The next start then fails, AXIS saying *"A
+configuration error is preventing LinuxCNC from starting"* (an `s.joints` timeout). With no
+LinuxCNC process running, remove that segment (`ipcrm`) before starting. The kiosk does this:
+`deploy/kiosk-session` runs `deploy/kiosk.sh clean-shm` before every LinuxCNC start. By hand,
+with AXIS: `deploy/kiosk.sh clean-shm`, or the commands in deploy/README.md.
 
 ### There is still no hardware emergency stop
 
@@ -85,26 +98,30 @@ better answer (see the estop section of `test-rig.hal`).
 | File | What it is |
 |---|---|
 | `test-rig.ini` | Machine parameters. Every key commented with meaning, units, and provenance. Key names/units verified against `ini-config.adoc` / `ini-homing.adoc` with inline line citations. |
-| `test-rig.hal` | Wiring. Loads `hostmot2` with `debug_modules=1 debug_idrom=1`. Limit/home switch nets present but **commented out on purpose**. |
+| `test-rig.hal` | Wiring. Loads `hostmot2` with `debug_modules=1 debug_idrom=1`. Limit/home switch nets **connected** (`.in_not`, since 2026-11-12); Y's second motor on `stepgen.03` at the end of the file. |
+
+The measurements behind the values: `docs/board-dumps/rig-measurements-2026-11-12.json`.
+The first program: `nc_files/faz8-kare.ngc` (`[DISPLAY]PROGRAM_PREFIX`).
 
 ### Verification performed
 
 - **107 INI keys** cross-checked against the reference docs — all documented or a known
   HAL-consumed custom variable.
-- **57 HAL pin names** cross-checked against the LinuxCNC source tree — all located.
-- **30 INI variable references** in the HAL — all resolve.
+- **79 HAL pin and parameter names** (plus the hm2 read/write functions) cross-checked
+  against the LinuxCNC source tree — all located. Recounted 2026-11-12 with `stepgen.03`
+  and the switch nets (`ioport.c:263`, `homing.c:245`, `motion.c:760-761`).
+- **90 INI variable references** (29 distinct) in the HAL — all resolve.
 - **Board facts** cross-checked against both dumps and against `hm2_eth.c:1183-1192`.
 
-Internally consistent and correct about the board, and it runs: loads, enables, jogs all
-three axes — Y one way only (docs/DURUM.md). **Scale, travel, switch nets and homing are
-not yet proven.**
+Internally consistent, correct about the board, and proven on the machine: it loads,
+enables, homes, jogs and runs a program inside the measured soft limits (2026-11-12).
 
 ---
 
 ## The config string, and one correction to it
 
 ```
-CONFIG = "num_stepgens=3 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx"
+CONFIG = "num_stepgens=4 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx"
 ```
 
 What each does and which IO pins it releases to plain GPIO — a pin whose owning module is
@@ -112,13 +129,14 @@ not instantiated falls back to full GPIO (`hostmot2.adoc:400-401`):
 
 | Setting | Effect | Frees |
 |---|---|---:|
-| `num_stepgens=3` | keeps StepGen 0–2 (IO 4–9), drops 3–5 | IO 10–15 (6) |
+| `num_stepgens=4` | keeps StepGen 0–3 (IO 4–11), drops 4–5. StepGen 3 drives Y's second motor (AXIS 3, since 2026-11-12) | IO 12–15 (4) |
 | `num_encoders=0` | drops all 3 QCount instances | IO 25–33 (9) |
 | `num_pwmgens=0` | drops the single PWM instance | IO 16 (1) |
 | `sserial_port_0=xxxxxxxx` | disables all SSerial channels | IO 0–3 (4) |
 
-20 pins freed, plus the 8 permanently-GPIO pins (IO 17–24) = **28 GPIO available**, 6
-consumed by the three stepgens. 6 + 28 = 34. ✓
+18 pins freed, plus the 8 permanently-GPIO pins (IO 17–24) = **26 GPIO available**, 8
+consumed by the four stepgens. 8 + 26 = 34. ✓ (Until 2026-11-12 it was `num_stepgens=3`:
+20 freed, 28 GPIO, 6 consumed.)
 
 > ### ⚠️ Correction: `sserial_port_0=00000000` does not disable SSerial
 >
@@ -151,10 +169,10 @@ the channel count are ignored, so 8 `x`'s is harmless.
 
 ---
 
-## Assumptions — 6 resolved, 1 partly open, 1 open
+## Assumptions — all 8 resolved (A5 and A6 on 2026-11-12)
 
 ```bash
-grep -rn 'ASSUMPTION:' configs/test-rig/     # 7 markers (+3 lines quoting this grep): 3 travel (A5), 3 homing directions (stay until homing is proven), 1 HAL switch mapping (PLAN-BUGUN phase 5)
+grep -rn 'ASSUMPTION[:]' configs/test-rig/     # prints nothing: no marker is left (2026-11-12)
 ```
 
 ### ✅ A1 — Board IP `10.10.10.10` — RESOLVED
@@ -196,26 +214,37 @@ Fixed in one place: `[HOSTMOT2]BOARD`. The HAL indirects through it, exactly as 
 "QCount" is the HostMot2 firmware's name for what the LinuxCNC driver calls "Encoder" —
 same module, gtag `0x04` (`hostmot2.h:96`). The config parameter is `num_encoders`.
 
-### ✅ A4 — stepgen → axis mapping — RESOLVED
+### ✅ A4 — stepgen → axis mapping — RESOLVED (StepGen 3 confirmed 2026-11-12)
 
 `test-rig.hal:114+`. StepGen instance N = AXIS N connector, from `readhmid:108-119` and
 `printpd:29-88`:
 
 ```
 StepGen 0   IO  4 Step   IO  5 Dir     -> AXIS 0 -> X
-StepGen 1   IO  6 Step   IO  7 Dir     -> AXIS 1 -> Y
+StepGen 1   IO  6 Step   IO  7 Dir     -> AXIS 1 -> Y, first motor
 StepGen 2   IO  8 Step   IO  9 Dir     -> AXIS 2 -> Z
-StepGen 3-5 IO 10-15                   -> disabled by num_stepgens=3
+StepGen 3   IO 10 Step   IO 11 Dir     -> AXIS 3 -> Y, second motor (since 2026-11-12)
+StepGen 4-5 IO 12-15                   -> disabled by num_stepgens=4
 ```
 
 Order is **Step then Dir, ascending** — *not* the Dir-before-Step order docs/03 found in
 the stock 7i96 data. One more reason that document does not apply here.
 
-Physically confirmed since: jogging drives AXIS 0 = X, AXIS 1 = Y, AXIS 2 = Z
-(docs/DURUM.md:115, docs/PLAN-BUGUN.md:82) — the axis blocks are not swapped. The exception is
-Y's direction, which does not change — Y+ and Y− move the same way (active DIR fault,
-docs/DURUM.md:12); where the DIR path fails — board terminal, cable or driver — is not yet
-measured (docs/PLAN-BUGUN.md phase 1).
+Physically confirmed: jogging drives AXIS 0 = X, AXIS 1 = Y, AXIS 2 = Z
+(docs/DURUM.md:115) — the axis blocks are not swapped — and AXIS 3 = StepGen 3: in the
+2026-11-12 scale check both Y gantry sides moved about 50 mm for a 50.005 mm command (left
+50.3, right 49.7).
+
+**The Y DIR fault is resolved (2026-11-12).** Y has two motors on two TB6560s, and both
+hung on AXIS 1. With the two opto inputs in parallel, AXIS 1's DIR high level read 2.43 V
+against 3.11 V on X's single-driver AXIS 0 (DIR low 0.2 V), and its STEP idle level 2.55 V
+against X's 3.21 V. The board's outputs are 3.3 V logic and the rig is wired
+**common-cathode** — driver `CLK−`/`CW−` to GND, the board's `5V` terminal unused, not the
+common-anode wiring in docs/09:54-62 — and one 3.3 V output cannot drive two optocouplers.
+The second Y driver now has its own output, AXIS 3 = `stepgen.03`, fed the same `[JOINT_1]`
+values, command and enable as `stepgen.01` (end of `test-rig.hal`), with `num_stepgens=4`.
+Y moves both ways and both step counters stay equal. One joint, two step generators: no
+separate homing or squaring, and the two sides' racking has not been checked yet.
 
 ### ✅ A8 — FPGA clock — RESOLVED, and our suspicion was misplaced
 
@@ -248,22 +277,34 @@ it is no longer gating anything. Downgraded from blocker B5.
 
 ---
 
-### ❌ A5 — Travel limits: X 150 mm, Y 150 mm, Z 50 mm — OPEN
+### ✅ A5 — Travel limits — RESOLVED 2026-11-12 (phase 4)
 
-`test-rig.ini:384` (X), `:481` (Y), `:523` (Z)
+`test-rig.ini:383-396` (X), `:481-484` (Y), `:522-530` (Z)
 
-Unchanged by the dumps — this is a property of the frame. GRBL's `$130`–`$132` were all
-still at the factory default of 200 mm while the same EEPROM's `SCALE` values had clearly
-been calibrated (docs/07), so they prove nothing. The values here are deliberate
-under-estimates so a wrong guess stops an axis *short* of the frame.
+Each axis was jogged onto its switches and the trip points were read in the pre-homing
+frame, in which the table sits at about 0 (Z has no bottom switch). The soft limits sit at
+least 3.3 mm inside a switch trip or the table:
 
-Z uses the opposite sign convention: homes at the top, so travel is negative
-(`MIN_LIMIT = -50`, `MAX_LIMIT = 0`).
+| Axis | Trips, pre-homing frame | Trip to trip | Machine frame | Soft limits | Usable | Margins |
+|---|---|---:|---|---|---:|---|
+| X | left −287.93 (3 approaches within 0.03 mm), right +115.43 | 403.4 mm | −0.64 / +402.72 | 3 … 399 | 396 mm | 3.64 / 3.72 mm |
+| Y | front −271.82, rear +119.53 | 391.3 mm | −0.67 / +390.68 | 3 … 387 | 384 mm | 3.67 / 3.68 mm |
+| Z | top +100.32 (release 99.79), table about 0 | about 100 mm to the table | top +0.52, table about −99.8 | −96.5 … −3 | 93.5 mm | 3.3 (table) / 3.52 (trip) mm |
 
-**Resolves it:** measure. Widen the soft limits, jog each axis slowly end to end, read the
-travel with a rule, then set these to measured-minus-margin. Blocker **T1** in docs/07.
+The machine frame's origin is each home switch's latch **release** edge (`HOME_OFFSET = 0`).
+The phase-4 release edges were read by polling and include its latency; homing later showed
+only small switch hysteresis (Z trip to release about 0.06 mm), so the margin on the home
+switch's side is a little smaller than listed and the far side's a little larger. GRBL's
+`$130`–`$132 = 200` were factory defaults (docs/07) and played no part.
 
-### 🟡 A6 — Which sensor is at which end — RESOLVED for X and Z by hand; Y's + end waits on the Y DIR fault
+Moves beyond the limits are refused (phase 7): MDI `G1 X999`, `X-50`, `Y999`, `Y-50`,
+`Z10` and `Z-200` at `F300` were all rejected by motion — *"Linear move on line N would
+exceed joint J's positive/negative limit"* plus *"invalid params in linear command"*
+(`command.c:261-267`, `:1003`) — and no axis moved. This closes blocker **T1** in docs/07.
+
+Z uses the opposite sign convention: it homes at the top, so its travel is negative.
+
+### ✅ A6 — Which sensor is at which end — RESOLVED (X and Z by hand; Y on 2026-11-12)
 
 `test-rig.ini:429` (X), `:491` (Y), `:538` (Z), `test-rig.hal:255+`
 
@@ -279,26 +320,26 @@ silkscreen maps straight onto global IO numbers, as docs/08 hypothesised:
 | 19 | `OUT 2` | `hm2_7i92.0.gpio.019.out` |
 | 20–24 | the 5 isolated inputs | `hm2_7i92.0.gpio.0NN.in` |
 
-**Verified by hand since** (docs/DURUM.md:69-82): `gpio.020` = X right, `gpio.021` = X left,
-`gpio.022` = Y rear, `gpio.023` = Y front, `gpio.024` = Z top; Z bottom has no switch. With
-X+ = right and Z+ = up, `gpio.020` is the X **maximum** end — not the home/minimum end the
-commented-out HAL plan gives it (docs/PLAN-BUGUN.md, "X limit ataması ters") — and
-`gpio.024` is the Z **+** end. Still unknown: which of Y rear/front is the + end, until Y's
-DIR fault is fixed (docs/PLAN-BUGUN.md phases 1–2). The dumps describe the FPGA; the frame
-side was answered by triggering each switch by hand.
+**Verified by hand** (docs/DURUM.md:69-82): `gpio.020` = X right, `gpio.021` = X left,
+`gpio.022` = Y rear, `gpio.023` = Y front, `gpio.024` = Z top; Z bottom has no switch.
+**Directions, measured 2026-11-12 (phase 2): X+ = right, Y+ = rear (away from the
+operator), Z+ = up.** So the minimum (home) ends are `gpio.021` (X left) and `gpio.023`
+(Y front), the maximum ends `gpio.020` (X right) and `gpio.022` (Y rear), and `gpio.024`
+is the Z **+** end. The dumps describe the FPGA; the frame side was answered by triggering
+each switch by hand and jogging each axis.
 
 **To re-check** (after any rewiring): halmeter, machine powered but **not enabled**, push
 each switch by hand:
 ```bash
 halrun -I
 halcmd: loadrt hostmot2 debug_modules=1
-halcmd: loadrt hm2_eth board_ip="10.10.10.10" config="num_stepgens=3 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx"
+halcmd: loadrt hm2_eth board_ip="10.10.10.10" config="num_stepgens=4 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx"
 halcmd: start
 halcmd: loadusr halmeter pin hm2_7i92.0.gpio.020.in
 ```
 Record for each of the five: which switch moves it, and in which direction.
 
-### ✅ A7 — Switch polarity: `.in` vs `.in_not` — RESOLVED: `.in_not`
+### ✅ A7 — Switch polarity: `.in` vs `.in_not` — RESOLVED: `.in_not`; nets connected 2026-11-12
 
 `test-rig.hal:240-253`
 
@@ -307,10 +348,13 @@ read TRUE when the switch is *open*. LinuxCNC inverts an input by choosing the n
 not a parameter — every pin has both `.in` and `.in_not` (`ioport.c:250`, `:263`).
 
 **This is why the switch nets were commented out at first.** Wrong polarity means LinuxCNC
-believes an axis is permanently on its limit — or, worse, believes it never is. Polarity is
-now known; the nets stay commented out until docs/PLAN-BUGUN.md phase 5, because Y's + end
-is unknown and the planned X mapping in the HAL is backwards (`gpio.020` is the X maximum
-end).
+believes an axis is permanently on its limit — or, worse, believes it never is. Since
+2026-11-12 the nets are connected with `.in_not` (`test-rig.hal:301-327`): `gpio.021` (X
+left) → home + negative limit, `gpio.020` (X right) → positive limit, `gpio.023` (Y front)
+→ home + negative, `gpio.022` (Y rear) → positive, `gpio.024` (Z top) → home + positive.
+Phase 5 pressed each switch by hand with the machine ON, and each tripped
+`joint N on limit switch error` for its own joint (N = 0 for both X switches, 1 for both Y
+switches, 2 for Z top).
 
 **Resolved (docs/DURUM.md:71), by triggering each switch by hand:** every input reads
 `.in` = TRUE at idle and FALSE when pressed, so HAL uses **`.in_not`**. GRBL's `$5 = 0`
@@ -326,68 +370,83 @@ machine (docs/01-machine-survey.md) would read the opposite way.
 
 | Value | Source |
 |---|---|
-| `SCALE` X 833.300, Y 823.500, Z 1250.000 | The machine's own GRBL EEPROM, empirically calibrated under GRBL. `docs/board-dumps/grbl-eeprom-2026-08-03.json`, analysed in docs/07. All positive because `$3 = 0`. **Not yet verified under LinuxCNC + TB6560** — the microstep setting may differ from the original drivers' (docs/DURUM.md:88, docs/09 T5); checked in docs/PLAN-BUGUN.md phase 3. |
-| `MAX_ACCELERATION = 10.0` | GRBL `$120`–`$122 = 10` — an untouched GRBL **factory default**, not a tuned value (docs/07 §2, docs/DURUM.md:94-96). Same units in both systems, no conversion (docs/06 Trap 4). Known to work only in the sense that the machine has run with it; its real capacity is unmeasured. |
-| `steplen`/`stepspace` 10000 ns, `dirsetup`/`dirhold` 50000 ns | TB6560 datasheet, docs/09. GRBL has no equivalent settings, so these could not have come from the EEPROM. Verified to fit the register range at 100 MHz. |
-| `FERROR = 0.050` / `MIN_FERROR = 0.005` | What every upstream hm2-stepper sample uses — `7i96s.ini:117-118`, identically in `7i93.ini`, `3x20-small.ini`, `4i65.ini`. |
+| `SCALE` X 100.085, Y 98.592, Z 122.274 steps/mm | **Measured on the rig 2026-11-12** (phase 3; the JSON, `faz3_scale`). A rough round, then a fine round — new = previous × commanded / measured: X 99.5 × 49.6902 / 49.4, Y 99.8 × 49.9873 / 50.6, Z 122.0 × 25.2566 / 25.2 — then a verification within 1 %: X 50.026 → 49.8 mm (−0.45 %), Y 50.005 → left 50.3 (+0.59 %) / right 49.7 (−0.61 %), Z 25.035 → 25.2 (+0.66 %). The GRBL EEPROM had `$100`–`$102` = 833.300 / 823.500 / 1250.000 (`docs/board-dumps/grbl-eeprom-2026-08-03.json`, docs/07): about 8.3× (X, Y) and 10.2× (Z) too high — never calibrated for these mechanics. All positive: + is right / rear / up. |
+| `MAX_VELOCITY` X/Y 10, Z 5 mm/s; `MAX_ACCELERATION` 50 mm/s² | Chosen 2026-11-12, raised from 3 mm/s and GRBL's factory-default 10 mm/s² (docs/07 §2). With the old, too-high `SCALE` the rig had physically run at about 9 mm/s and about 84 mm/s² all day; a 5 mm/s homing search stops in 0.25 mm at 50 mm/s², against about 1.3 mm of switch overtravel. `[DISPLAY]`/`[TRAJ]` `MAX_LINEAR_VELOCITY` 10, `DEFAULT_LINEAR_VELOCITY` 3. |
+| `STEPGEN_MAX_VEL` 12 / 12 / 6, `STEPGEN_MAX_ACC` 60 | 20 % above the joint limits (see the shared note in the INI). |
+| `steplen`/`stepspace` 10000 ns, `dirsetup`/`dirhold` 50000 ns | TB6560 datasheet, docs/09. GRBL has no equivalent settings, so these could not have come from the EEPROM. Verified to fit the register range at 100 MHz. Unchanged on 2026-11-12: a runtime test with longer pulses changed nothing. |
+| `FERROR = 0.500` / `MIN_FERROR = 0.050` | Ten times what every upstream hm2-stepper sample uses (0.050 / 0.005 — `7i96s.ini:117-118`, identically in `7i93.ini`, `3x20-small.ini`, `4i65.ini`). Raised 2026-11-12: with the measured `SCALE` one step is about 0.01 mm, so the old `MIN_FERROR` of 0.005 was below one step. |
+| Soft limits X 3 … 399, Y 3 … 387, Z −96.5 … −3 | Measured, A5 above. |
+| Homing: `HOME_SEARCH_VEL` X/Y −5, Z +4; `HOME_LATCH_VEL` ±0.2; `HOME` 5 / 5 / −5; `HOME_OFFSET` 0; `HOME_SEQUENCE` Z 0, Y 1, X 2 | Works since 2026-11-12 (phase 6): Home All runs Z → Y → X. Repeatability, read from `joint.N.motor-offset` because the DRO always reads `HOME` after homing: Z 0.0001 mm, Y 0.030 mm, X 0.0017 mm. |
 | `HOME_IGNORE_LIMITS = YES` | Required because home and limit share one switch. `ini-homing.adoc:174`. |
 
-`SCALE` X and Y differ by 1.2 % despite nominally identical mechanics. **That is what an
-honest empirical calibration looks like — do not tidy them to match.**
+`SCALE` X and Y differ by 1.5 % despite nominally identical mechanics. **Both are
+measurements — do not tidy them to match.**
 
 ---
 
-## Velocity: why 3 mm/s and not 14
+## Velocity: why 10 mm/s (Z 5) and not more
 
-`MAX_VELOCITY = 3.0` everywhere is a first-run figure, not a hardware limit. From docs/09,
-the TB6560 is rated **15 kHz** max STEP frequency — a limit of the *driver board*. With a
-20 % margin (12 kHz):
+`MAX_VELOCITY` was raised from 3 to 10 mm/s (Z 5) on 2026-11-12, once `SCALE` was measured:
+under the old, ~8.3× too high `SCALE` the rig had in fact run at about 9 mm/s and about
+84 mm/s² all day. The TB6560 is rated **15 kHz** max STEP frequency (docs/09) — a limit of
+the *driver board*. With a 20 % margin (12 kHz) and the measured `SCALE`:
 
 | Axis | SCALE | ceiling at 12 kHz | mm/min |
 |---|---:|---:|---:|
-| X | 833.3 | 14.4 mm/s | 864 |
-| Y | 823.5 | 14.6 mm/s | 874 |
-| Z | 1250.0 | 9.6 mm/s | 576 |
+| X | 100.085 | 119.9 mm/s | 7194 |
+| Y | 98.592 | 121.7 mm/s | 7303 |
+| Z | 122.274 | 98.1 mm/s | 5888 |
 
-The machine ran at 500 mm/min under GRBL, so headroom is modest and Z barely improves. The
-lever that helps is **reducing microstepping** — 1/16 → 1/8 halves `SCALE` and doubles the
-ceiling, but requires recalibrating `SCALE`. And the 15 kHz figure is the manufacturer's,
-independently unverified: find the real ceiling by raising speed until steps are lost.
+So the step rate no longer limits anything here — 10 mm/s on X is about 1 kHz. Motor torque
+and the mechanics do, and nothing above these values has been tried. The 15 kHz figure is
+the manufacturer's, independently unverified: find the real ceiling by raising speed until
+steps are lost.
 
 Raising a joint's `MAX_VELOCITY` means also raising the matching `[AXIS_x]` (or the axis
-limit silently caps it) and `STEPGEN_MAX_VEL` (to stay ~20 % above).
+limit silently caps it) and `STEPGEN_MAX_VEL` (to stay 20 % above).
+
+**Open (phase 8):** homing motor-offsets after three program runs moved Y 0.0001 mm, X
+0.036 mm and Z 0.066 mm — Z drifts one way, about 0.02 mm per run. Suspected cause: Z's
+50 mm/s² is too high against gravity. Next: try 25 mm/s² on Z and repeat the runs.
 
 ---
 
-## Suggested order of work
+## Done on 2026-11-12, and what is left
 
-*Updated 2026-10-18.* Board-side steps are done, and so are the hand switch map (A6 for
-X/Z, A7) and the first jog of all three axes (docs/DURUM.md). The remaining work follows
-**[docs/PLAN-BUGUN.md](../../docs/PLAN-BUGUN.md)**, phases 1–9; each phase has a gate that
-must pass before the next:
+Phases 1–8 ran on the rig on 2026-11-12, each with a gate that had to pass before the next
+(numbers: the JSON):
 
-1. **Y DIR fault** — Y+ and Y− move the same way; find where the DIR signal is lost
-   (board terminal, cable or driver).
-2. **Direction map** — once Y reverses, jog it and record which way is Y+ → closes the Y
-   part of **A6**.
-3. **Scale check** — jog a known distance and measure; `SCALE` came from GRBL and is not
-   yet verified under LinuxCNC/TB6560.
-4. **Travel** — very slowly, hand on the power switch. No switch is wired, and the soft
-   limits do not protect an unhomed axis: until homing, LinuxCNC only bounds a jog to ±(full
-   range) around the current position (`command.c:153-174`), so you stop the axis yourself.
-   Jog X and Y until they touch each switch, Z down from the top switch only until close
-   to the mechanical stop (no bottom switch); leave 2–3 mm margin → resolves **A5**.
-5. **Switch nets** — uncomment them with `.in_not`, X mapping corrected (`gpio.021` → home +
-   negative limit, `gpio.020` → positive limit), Y per step 2.
-6. **Homing** — first attempt; it has never been tried.
-7. **Soft limits** — prove that a move beyond them is refused.
-8. **Dry run** — a first G-code program end to end, Z above the work.
-9. **Persist** — write the measured values into the INI and drop their markers, commit,
-   and check that the live-USB persistence survives a reboot.
+1. **Y DIR fault** — fixed: Y's second driver on its own output, AXIS 3 (`stepgen.03`); Y
+   moves both ways and both step counters stay equal.
+2. **Direction map** — X+ = right, Y+ = rear, Z+ = up → closed the Y part of **A6**.
+3. **Scale** — measured and verified within 1 % (table above).
+4. **Travel** — switch trip points measured, soft limits at least 3.3 mm inside → closed
+   **A5**. The Y two-side racking check was deferred.
+5. **Switch nets** — connected with `.in_not`; each switch trips its own joint.
+6. **Homing** — Z → Y → X works. Repeatability Z 0.0001, Y 0.030, X 0.0017 mm — X only
+   after an intermittent X motor-cable contact was repaired; before that X drifted 0.047 /
+   0.132 mm in one direction, i.e. lost steps.
+7. **Soft limits** — moves past them are refused by motion, and no axis moved.
+8. **Dry run** — `nc_files/faz8-kare.ngc`, a 50 mm square at F300 starting at X10 Y10, ran
+   four times without an error, hm2 packet errors staying 0. Its Z moves use `G53`: the
+   G54 offsets are zero and the Z window is −96.5 … −3, so a `G0 Z5` would be refused.
+   Accepted with the Z drift open (above).
+9. **Persist** — the measured values are in the INI and the markers are gone; the commit
+   and the check that the live-USB persistence survives a reboot remain.
 
-*(Optional, no longer blocking)* Scope a step pulse → fully closes **A8**.
+Still open on the rig:
 
-> **Before that first homing attempt**, read `ini-homing.adoc:46`: starting homing on the
+- **Z drift**, about 0.02 mm per run in one direction: try `MAX_ACCELERATION` 25 on Z and
+  repeat the runs.
+- **X motor cable** — an intermittent contact cost steps until it was repaired; its
+  durability is unproven.
+- **Y racking** — the two Y sides were never checked against each other.
+- `pin_new(hm2_7i92.0.gpio.000.in_not)` and `(gpio.001.in) called with
+  already-initialized memory` appear at every LinuxCNC start, good starts included — cause
+  unknown, apparently harmless (docs/DURUM.md:156).
+- *(Optional)* scope a step pulse → fully closes **A8**.
+
+> **After any rewiring, before homing**, read `ini-homing.adoc:46`: starting homing on the
 > wrong side of a home switch, *combined with `HOME_IGNORE_LIMITS`*, leads to a hard crash.
 > With limits ignored during homing there is nothing to stop the axis. Know which side of
 > each switch you are on.
@@ -396,17 +455,18 @@ must pass before the next:
 
 ## Status
 
-**Board: VERIFIED. Config: runs — loads cleanly, enables, all three axes jog. Machine:
-partly verified — switch map and polarity by hand. Open: Y DIR fault (Y moves one way
-only); scale, travel, switch nets and homing not yet done.** *(2026-10-18)*
+**Board: VERIFIED. Config: runs, homes and runs programs — measured on the rig in phases
+1–8. Machine: directions, scale, travel, switch nets and homing verified. Open: Z drifts
+about 0.02 mm per run (try 25 mm/s² on Z), the Y racking check, X motor-cable
+durability.** *(2026-11-12)*
 
 | ID | Assumption | Status | Resolved by |
 |---|---|---|---|
 | A1 | Board IP `10.10.10.10` | ✅ resolved | `readhmid:1` — dumps taken from it |
 | A2 | HAL prefix | ✅ resolved — **was wrong**, `hm2_7i92.0` not `hm2_7i96.0` | `readhmid:4-6, :12`; `hm2_eth.c:1183` |
 | A3 | Module inventory | ✅ resolved — 6 StepGen, 3 QCount, 1 PWM, 1 SSerial | `readhmid:25-97` |
-| A4 | stepgen 00/01/02 → X/Y/Z | ✅ resolved — StepGen N = AXIS N | `readhmid:108-119`, `printpd:29-88` |
-| A5 | Travel 150/150/50 mm | ❌ open | measure with a rule |
-| A6 | Sensor-to-end mapping | 🟡 X and Z resolved by hand; Y's + end waits on the Y DIR fault | switches triggered by hand + jog directions, `docs/DURUM.md:69-82` |
-| A7 | Switch polarity | ✅ resolved — idle TRUE, pressed FALSE → `.in_not` | switches triggered by hand, `docs/DURUM.md:71` |
+| A4 | stepgen 00/01/02 → X/Y/Z | ✅ resolved — StepGen N = AXIS N; StepGen 3 = AXIS 3 = Y's second motor (2026-11-12) | `readhmid:108-119`, `printpd:29-88`; both Y sides moved ~50 mm |
+| A5 | Travel 150/150/50 mm | ✅ resolved 2026-11-12 — 396 / 384 / 93.5 mm usable | switch trip points, phase 4 (the JSON, `faz4_travel`) |
+| A6 | Sensor-to-end mapping | ✅ resolved — X and Z by hand, Y+ = rear on 2026-11-12 | switches triggered by hand, `docs/DURUM.md:69-82`; phase 2 jog directions |
+| A7 | Switch polarity | ✅ resolved — idle TRUE, pressed FALSE → `.in_not`; nets connected 2026-11-12 | switches triggered by hand, `docs/DURUM.md:71`; phase 5 |
 | A8 | FPGA clock | ✅ resolved — 100 MHz, self-consistent | `readhmid:17-18, :68` |

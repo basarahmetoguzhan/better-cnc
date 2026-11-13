@@ -80,13 +80,13 @@ class PlatformInfo(NamedTuple):
     source: str
 
 
-#: docs/DURUM.md:20-27 - a Windows laptop booted from a LinuxCNC live USB.
+#: docs/DURUM.md:20-27 - any PC booted from the LinuxCNC live USB (the port's name varies by PC).
 #: amd64, NOT arm64: the prototype said arm64.
 TEST_RIG_PLATFORM = PlatformInfo(
     kernel="6.12.95+deb13-rt-amd64 (PREEMPT_RT)",
     linuxcnc="2.9.10 uspace",
-    host="Monster laptop · live USB, 10 GB persistence",
-    nic="enp3s0 (Realtek RTL8125, 100 Mbps Full) · 10.10.10.1/24",
+    host="herhangi bir PC · live USB, 10 GB persistence",
+    nic="kablolu Ethernet portu (adı PC'ye göre değişir: enp3s0, enp12s0…) · 10.10.10.1/24",
     # configs/test-rig/test-rig.ini [EMCMOT]SERVO_PERIOD = 1000000 ns. Not in
     # docs/DURUM.md:20-27, which the rest of this record cites.
     servo_period_ms=1.0,
@@ -157,14 +157,15 @@ class MissingSwitch(NamedTuple):
 
 
 #: Switch locations hand-verified by triggering each switch (docs/DURUM.md:69-80).
-#: The travel END follows from the jog directions X+ = right, Z+ = up
-#: (docs/DURUM.md:82). Y's direction is unknown - its DIR fault makes Y+ and Y-
-#: move the same way - so which Y switch is the + end is "", not guessed.
+#: The travel END follows from the jog directions X+ = right, Y+ = rear,
+#: Z+ = up (docs/DURUM.md:82; Y's known since its DIR fault was solved,
+#: 2026-11-12), and is how configs/test-rig/test-rig.hal nets each switch to
+#: a positive or negative limit (Faz 5).
 TEST_RIG_INPUTS: Tuple[DigitalInput, ...] = (
     DigitalInput("gpio.020", "X sağ uç", "X", "+", True, "docs/DURUM.md:75, :82"),
     DigitalInput("gpio.021", "X sol uç", "X", "-", True, "docs/DURUM.md:76, :82"),
-    DigitalInput("gpio.022", "Y arka uç", "Y", "", True, "docs/DURUM.md:77, :82"),
-    DigitalInput("gpio.023", "Y ön uç", "Y", "", True, "docs/DURUM.md:78, :82"),
+    DigitalInput("gpio.022", "Y arka uç", "Y", "+", True, "docs/DURUM.md:77, :82"),
+    DigitalInput("gpio.023", "Y ön uç", "Y", "-", True, "docs/DURUM.md:78, :82"),
     DigitalInput("gpio.024", "Z üst", "Z", "+", True, "docs/DURUM.md:79, :82"),
 )
 
@@ -307,7 +308,7 @@ def _test_rig_missing_switches(config: MachineConfig) -> Tuple[MissingSwitch, ..
 
 def test_rig_profile(ini_path: Optional[str] = None) -> MachineProfile:
     """The wooden 3-axis router. Everything here is verified, explicitly absent, or
-    explicitly marked unknown / unmeasured (e.g. which Y switch is the + end, travel).
+    explicitly marked unknown / unmeasured (e.g. latency).
 
     Travel facts (SOFT_LIMITS, travel_measured, travel_note, the Z-bottom
     consequence) are read from the INI at `ini_path`, by default
@@ -368,9 +369,11 @@ def test_rig_profile(ini_path: Optional[str] = None) -> MachineProfile:
             "docs/MERMER-GECIS.md:109",
         ),
         Capability.FOURTH_AXIS: absent(
-            "3 eksen. num_stepgens=3.",
-            "num_stepgens=4 — stepgen.03 zaten IO 10/11'de hazır, firmware değişmiyor",
-            "docs/MERMER-GECIS.md:41",
+            "3 eksen. Y'nin iki motoru tek eklem: stepgen.01 (AXIS 1) ve stepgen.03 "
+            "(AXIS 3) aynı komutu alır; ayrı referans ve kareleme yok.",
+            "Portal için Y'yi iki ekleme bölmek: trivkins coordinates=XYYZ, 4 joint, "
+            "negatif HOME_SEQUENCE. num_stepgens=4 zaten açık, firmware değişmiyor.",
+            "configs/test-rig/test-rig.hal (dosyanın sonu), docs/MERMER-GECIS.md:41, :75-79",
         ),
         Capability.SOFT_LIMITS: _soft_limits_from_ini(config, ini_path),
     }
@@ -392,9 +395,10 @@ def test_rig_profile(ini_path: Optional[str] = None) -> MachineProfile:
             "kalibre edilmiş değil."
         ),
         notes=(
-            "Y ekseninin DIR hattında aktif arıza — yön değişmiyor; yeri (kart klemensi, "
-            "kablo ya da sürücü) henüz ölçülmedi (docs/DURUM.md:12). Y'nin hangi ucunun + "
-            "olduğu bilinmiyor (docs/DURUM.md:82).",
+            "Y'de iki motor, tek eklem: stepgen.01 (AXIS 1) ve stepgen.03 (AXIS 3) aynı "
+            "komutu alır. Eski Y DIR arızası buydu — iki sürücü tek çıkıştaydı; "
+            "2026-11-12'de çözüldü (docs/DURUM.md:12). İki tarafın kareleme kontrolü "
+            "henüz yapılmadı.",
             "Home ve limit aynı switch'i paylaşıyor → her eklemde HOME_IGNORE_LIMITS = YES.",
         ),
     )

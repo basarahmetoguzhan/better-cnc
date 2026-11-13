@@ -41,18 +41,19 @@ def session(profile_key: str = "test-rig"):
     return profile, config, adapter
 
 
-def view(profile_key: str = "test-rig", screen: str = "kontrol", adapter=None):
-    profile = load_profile(profile_key)
+def view(profile_key="test-rig", screen: str = "kontrol", adapter=None):
+    """`profile_key` is a profile's key or a built MachineProfile (rig_profile)."""
+    profile = load_profile(profile_key) if isinstance(profile_key, str) else profile_key
     config = load_machine_config(profile)
     adapter = adapter if adapter is not None else MockAdapter(profile)
     return VM.build(profile, config, adapter.snapshot(), screen=screen)
 
 
-def html(profile_key: str = "test-rig", screen: str = "kontrol", adapter=None) -> str:
+def html(profile_key="test-rig", screen: str = "kontrol", adapter=None) -> str:
     return R.render_body(view(profile_key, screen, adapter))
 
 
-def all_html(profile_key: str = "test-rig", adapter=None) -> str:
+def all_html(profile_key="test-rig", adapter=None) -> str:
     """Every screen concatenated - for 'this string must never appear' checks."""
     return "\n".join(html(profile_key, s, adapter) for s in ALL_SCREENS)
 
@@ -96,6 +97,27 @@ def strip_markers(text: str) -> str:
     for marker in PROVISIONAL_MARKERS:
         text = re.sub(re.escape(marker), "", text, flags=re.IGNORECASE)
     return text
+
+
+#: The comment provisional_travel() puts above every travel limit pair.
+PROVISIONAL_TRAVEL_MARKER = "# ASSUMPTION: travel not measured (test fixture)."
+
+
+def provisional_travel(text: str) -> str:
+    """test-rig.ini with every travel limit under an ASSUMPTION block again,
+    as the file was until Faz 4 measured the travel (2026-11-12).
+
+    The real file has no marker left, but the unmeasured path still has to
+    hold for the next INI (the marble machine has none yet), so the tests
+    that pin it run on this copy. The marker goes directly above each
+    MIN_LIMIT line: it joins the comment block there and governs MIN_LIMIT
+    and MAX_LIMIT both (iniload.parse_ini_text). Six lines carry MIN_LIMIT,
+    three [JOINT_n] and three [AXIS_*], marked alike as they were then. Only
+    comment lines are added, so every key keeps its value."""
+    out, n = re.subn(r"(?m)^(MIN_LIMIT\s*=)", PROVISIONAL_TRAVEL_MARKER + "\n\\1", text)
+    if n != 6:
+        raise AssertionError("expected 6 MIN_LIMIT lines in test-rig.ini, found {}".format(n))
+    return out
 
 
 def rig_profile(

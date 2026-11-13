@@ -12,15 +12,16 @@
 #   kept        trivkins, motmod at [EMCMOT]SERVO_PERIOD, the estop_latch chain,
 #               the tool-change loopback, the servo-thread function order
 #   replaced    hm2_eth stepgens  ->  motor-pos-cmd looped to motor-pos-fb
-#               (no steps, so SCALE and step timing are NOT exercised)
+#               (no steps, so SCALE and step timing are NOT exercised; Y's
+#               second motor, stepgen.03 on the rig, has no counterpart)
 #               hm2_eth link pins ->  sim/hm2_link_stub.py, same names
-#               the five switches ->  sim_home_switch, wired as PLAN-BUGUN
-#                                     Faz 5 plans them (X corrected)
+#               the five switches ->  sim_home_switch, netted as test-rig.hal
+#                                     nets them (connected there 2026-11-12)
 #
-# Switch positions are INVENTED for the simulator and say nothing about the rig,
-# whose travel is unmeasured (PLAN-BUGUN Faz 4). They are in motor units, and
-# every motor starts at 0 when LinuxCNC starts, i.e. between its switches, on
-# the side homing searches toward.
+# Switch positions follow the rig's travel as measured on 2026-11-12 (Faz 4,
+# docs/board-dumps/rig-measurements-2026-11-12.json); see SWITCHES below. They
+# are in motor units, and every motor starts at 0 when LinuxCNC starts, i.e.
+# between its switches, close to the one homing searches toward.
 # =============================================================================
 
 
@@ -78,22 +79,32 @@ net motor.02.pos joint.2.motor-pos-cmd => joint.2.motor-pos-fb sim-z-top.cur-pos
 
 
 # =============================================================================
-# SWITCHES - as PLAN-BUGUN Faz 5 plans them, not as test-rig.hal has them
+# SWITCHES - as test-rig.hal nets them (Faz 5, 2026-11-12)
 # =============================================================================
-# On the rig these nets are still commented out, and homing there would search
-# forever. Here they are connected, so homing can be exercised. A simulated
+# Same signal names and the same home/limit split as the rig. A simulated
 # switch reads TRUE when pressed, like `.in_not` on the rig.
 #
 # X: gpio.021 (left, minimum) is home + negative limit, gpio.020 (right,
-#    maximum) the positive limit - the corrected mapping, PLAN-BUGUN Faz 5.
-# Y: which of gpio.022 / gpio.023 is the minimum is UNKNOWN (Y DIR fault).
-#    The simulator assumes Y is wired like X.
+#    maximum) the positive limit.
+# Y: gpio.023 (FRONT, minimum) is home + negative limit, gpio.022 (rear,
+#    maximum) the positive limit: Y+ = rear (Faz 2).
 # Z: gpio.024, top only: home + positive limit. No bottom switch.
+#
+# Positions. Homing latches where the min (Z: top) switch releases, 0.1
+# (sim_home_switch's default hysteresis) back off home-pos: motor -9.9 on X and
+# Y, 4.9 on Z. With HOME_OFFSET = 0 that point is machine 0, as the release
+# edge is on the rig. Each max switch then sits at the rig's Faz 4 trip in the
+# machine frame, i.e. ~3.7 mm beyond MAX_LIMIT (399 / 387) as on the rig:
+#     X max   -9.9 + 402.72 = 392.82        Y max   -9.9 + 390.68 = 380.78
+# The rig's min trips were estimated at -0.64 / -0.67 and Z's top trip at
+# +0.52 (machine frame, polling latency included); here they are -0.1 and
+# +0.1. The min switches sit 10 mm (Z top 5 mm) from where the motors start,
+# so homing is quick. Nothing stands for the table 3.3 mm below Z's MIN_LIMIT.
 
 setp sim-x-min.home-pos -10.0
-setp sim-x-max.home-pos 145.0
+setp sim-x-max.home-pos 392.82
 setp sim-y-min.home-pos -10.0
-setp sim-y-max.home-pos 145.0
+setp sim-y-max.home-pos 380.78
 setp sim-z-top.home-pos   5.0
 
 net x-home-limit sim-x-min.home-sw => joint.0.home-sw-in joint.0.neg-lim-sw-in

@@ -1,8 +1,9 @@
 """Read a LinuxCNC INI file, keeping track of which values are PROVISIONAL.
 
 Why this exists rather than configparser: we need one thing configparser throws
-away - the comments. configs/test-rig/test-rig.ini deliberately marks every value
-that was guessed rather than measured:
+away - the comments. An INI marks every value that was guessed rather than
+measured; configs/test-rig/test-rig.ini did so until its travel was measured
+on 2026-11-12 (Faz 4):
 
     # --- Soft limits: PROVISIONAL, MUST BE MEASURED ------------------------
     # ASSUMPTION: 150 mm of usable X travel.
@@ -17,6 +18,7 @@ as if it were measured. Parsing the ASSUMPTION marker is what lets the UI say
 
 The useful property: when travel is finally measured and the ASSUMPTION comment
 is deleted from the INI, the UI starts showing the numbers with no code change.
+That is how the test rig's limits reached the screens.
 
 Line structure follows LinuxCNC's own reader, IniFile::Find in
 reference/linuxcnc/src/libnml/inifile/inifile.cc (cited below as inifile.cc):

@@ -1,5 +1,5 @@
 #!/bin/bash
-# The kiosk, on the machine (test rig laptop's live USB now, Pi 4 later).
+# The kiosk, on the machine (the test rig's live USB, on any PC, now; Pi 4 later).
 # Run from the repo, with sudo. deploy/README.md has the whole picture.
 #
 #   sudo deploy/kiosk.sh install [--user U] [--ini PATH] [--profile P] [--layout tr]
@@ -11,9 +11,17 @@
 #        tty1 to the kiosk at once instead of at the next boot.
 #   sudo deploy/kiosk.sh disable [--now]
 #        back to the desktop the machine had before `enable`.
-#   sudo deploy/kiosk.sh board-network [--iface enp3s0] [--addr 10.10.10.1/24]
+#   sudo deploy/kiosk.sh board-network [--iface IF] [--addr 10.10.10.1/24]
 #        the Mesa board's static address, so it no longer needs
-#        `sudo ip addr add` after every boot (docs/DURUM.md:29-36).
+#        `sudo ip addr add` after every boot (docs/DURUM.md:29-36). On any PC:
+#        bound to no interface name, it takes whichever wired port the board's
+#        cable is in (USB adapters, enx*, excluded). The Ethernet port is the
+#        board's; home network over Wi-Fi. Never cuts a live connection.
+#        --iface IF binds it to one port and brings it up (PCs with several).
+#   deploy/kiosk.sh clean-shm
+#        LinuxCNC's motion shared memory, if a stop left it behind (SysV key
+#        0x00000064, nothing attached), is removed - only while no LinuxCNC
+#        process runs. kiosk-session runs it before every LinuxCNC start.
 #   sudo deploy/kiosk.sh status
 #   sudo deploy/kiosk.sh uninstall
 set -euo pipefail
@@ -32,6 +40,25 @@ LOGIND_PATH=/etc/systemd/logind.conf.d/90-bettercnc-kiosk.conf
 WAIT_PATH=/usr/share/bettercnc/wait.html
 STATE=/etc/bettercnc
 PREV_DM="$STATE/previous-display-manager"
+# The board's NetworkManager profile. The live USB moves between PCs and each
+# names its port differently - the August laptop enp3s0, the 2026-11-12 PC
+# enp12s0 - so it matches wired ports by pattern, never by one name. udev
+# names USB network adapters enx<MAC>: never the board's port (hm2_eth needs
+# the PC's own NIC, docs/05). Keep board_port() below in step with the match.
+BOARD_CON=bettercnc-board
+BOARD_MATCH='en* eth* !enx*'
+# Above a profile's default priority (0), which NetworkManager's own generated
+# "Wired connection N" does not exceed either, so a board plugged into the port
+# gets this profile, whatever PC it is.
+BOARD_PRIORITY=100
+# LinuxCNC's motion shared memory: SysV key 100, [EMCMOT]SHMEM_KEY's default
+# (emcmotcfg.h:49; test-rig.ini sets none). After a TERM shutdown LinuxCNC
+# sometimes leaves it behind with nothing attached, and every start after
+# that fails: "A configuration error is preventing LinuxCNC from starting"
+# (2026-11-12). While any of these runs - the linuxcnc script, or a process
+# that creates or attaches the segment - it is no orphan.
+LCNC_SHM_KEY=0x00000064
+LCNC_PROCS='linuxcnc|rtapi_app|milltask|linuxcncsvr'
 
 die() { echo "kiosk.sh: $*" >&2; exit 1; }
 need_root() { [ "$(id -u)" = 0 ] || die "sudo ile çalıştırın"; }
@@ -140,28 +167,103 @@ disable_kiosk() {
   fi
 }
 
+# Whether a device name can be the board's port: wired, not a USB adapter.
+# The same rule as BOARD_MATCH, for the devices nmcli lists.
+board_port() {
+  case "$1" in
+    enx*) return 1 ;;
+    en*|eth*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 board_network() {
   need_root
-  local iface=enp3s0 addr=10.10.10.1/24
+  local iface="" addr=10.10.10.1/24
   while [ $# -gt 0 ]; do
+    case "$1" in
+      --iface|--addr) [ $# -ge 2 ] || die "$1 bir değer ister" ;;
+    esac
     case "$1" in
       --iface) iface="$2"; shift 2 ;;
       --addr) addr="$2"; shift 2 ;;
       *) die "bilinmeyen seçenek: $1" ;;
     esac
   done
-  ip link show "$iface" >/dev/null 2>&1 || die "arayüz yok: $iface"
+  if [ -n "$iface" ]; then
+    ip link show "$iface" >/dev/null 2>&1 || die "arayüz yok: $iface"
+  fi
   if ! command -v nmcli >/dev/null || ! systemctl is-active -q NetworkManager; then
-    die "NetworkManager yok; adresi elle verin: ip addr add $addr dev $iface"
+    die "NetworkManager yok; adresi elle verin: ip addr add $addr dev ${iface:-<kartın takılı olduğu port>}"
   fi
   # never-default: the board's link must never take the default route - a
   # route there cut the internet once (docs/DURUM.md:38, 192.168.1.1/24).
-  nmcli connection delete bettercnc-board >/dev/null 2>&1 || true
-  nmcli connection add type ethernet con-name bettercnc-board ifname "$iface" \
-    ipv4.method manual ipv4.addresses "$addr" ipv4.never-default yes \
-    ipv6.method disabled connection.autoconnect yes
-  nmcli connection up bettercnc-board
-  ip -brief addr show "$iface"
+  local settings=(ipv4.method manual ipv4.addresses "$addr" ipv4.never-default yes
+                  ipv6.method disabled connection.autoconnect yes
+                  connection.autoconnect-priority "$BOARD_PRIORITY")
+  nmcli connection delete "$BOARD_CON" >/dev/null 2>&1 || true
+  if [ -n "$iface" ]; then
+    nmcli connection add type ethernet con-name "$BOARD_CON" ifname "$iface" "${settings[@]}"
+    nmcli connection up "$BOARD_CON"
+    ip -brief addr show "$iface"
+    return
+  fi
+  # ifname '*': bound to no interface name; the match keeps it to wired,
+  # non-USB ports.
+  nmcli connection add type ethernet con-name "$BOARD_CON" ifname '*' \
+    match.interface-name "$BOARD_MATCH" "${settings[@]}"
+  # Never cut a live connection: this runs over SSH, and on a PC with one
+  # port and no Wi-Fi the SSH link IS the port the board will use
+  # (2026-11-12). Bring the profile up only on the one eligible port with a
+  # cable in and nothing on it; otherwise NetworkManager brings it up by
+  # itself when the board's cable goes in (autoconnect + priority).
+  local dev type state free=()
+  while IFS=: read -r dev type state; do
+    if [ "$type" != ethernet ] || ! board_port "$dev"; then continue; fi
+    # disconnected = a cable in, no connection on it; unavailable = no cable;
+    # connected/connecting = in use (maybe this very SSH session).
+    if [ "$state" = disconnected ]; then free+=("$dev"); fi
+  done < <(LC_ALL=C nmcli -t -f DEVICE,TYPE,STATE device)
+  if [ "${#free[@]}" = 1 ]; then
+    nmcli connection up "$BOARD_CON" ifname "${free[0]}"
+    ip -brief addr show "${free[0]}"
+  else
+    echo "$BOARD_CON kuruldu; açık bir bağlantıyı kesmemek için şimdi açılmadı."
+    if [ "${#free[@]}" -gt 1 ]; then
+      echo "Kablosu takılı, boşta birden çok port var (${free[*]}): kartınki için --iface <port>."
+    fi
+    echo "Kartın kablosu Ethernet portuna takılınca, hangi PC olursa olsun, kendiliğinden devreye girer."
+    echo "Ev ağı Wi-Fi'dan gelir. Kabloyla internet gerekirse ağ menüsünden \"Wired connection\"ı seçin"
+    echo "(ya da: nmcli connection up \"Wired connection 1\")."
+  fi
+}
+
+# No root needed: rtapi_app hands the segment to the user LinuxCNC runs as
+# (uspace_common.h:103-119), the kiosk's own user. Never while a LinuxCNC
+# process runs or could not be ruled out, never a segment with anything
+# attached.
+clean_shm() {
+  local running code=0
+  running="$(pgrep -x "$LCNC_PROCS")" || code=$?
+  if [ "$code" = 0 ]; then
+    echo "LinuxCNC çalışıyor (pid ${running//$'\n'/ }); paylaşımlı belleğe dokunulmadı."
+    return 0
+  elif [ "$code" != 1 ]; then
+    echo "LinuxCNC süreçlerine bakılamadı (pgrep: $code); paylaşımlı belleğe dokunulmadı." >&2
+    return 0
+  fi
+  local key id owner nattch
+  while read -r key id owner _ _ nattch _; do
+    [ "$key" = "$LCNC_SHM_KEY" ] || continue
+    if [ "$nattch" != 0 ]; then
+      echo "paylaşımlı bellek $key (shmid $id) kullanımda ($nattch bağlı); dokunulmadı."
+    elif ipcrm -m "$id"; then
+      echo "sahipsiz paylaşımlı bellek silindi: key $key, shmid $id."
+    else
+      echo "sahipsiz paylaşımlı bellek silinemedi (sahibi $owner); elle: sudo ipcrm -m $id" >&2
+      return 1
+    fi
+  done < <(LC_ALL=C ipcs -m)
 }
 
 status() {
@@ -187,6 +289,7 @@ case "$cmd" in
   enable) enable_kiosk "$@" ;;
   disable) disable_kiosk "$@" ;;
   board-network) board_network "$@" ;;
+  clean-shm) clean_shm ;;
   status) status ;;
   uninstall) uninstall ;;
   *) sed -n '2,/^[^#]/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;

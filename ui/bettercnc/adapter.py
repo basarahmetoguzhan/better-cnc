@@ -101,6 +101,13 @@ HAL_LINK_PINS = (
     LinkHealth.HAL_IO_ERROR,             # hostmot2.c:1446
 )
 
+# LinuxCncAdapter also reads, the same way (LinuxCncAdapter._read_live_hal):
+#   the switch inputs   each profile input's hal_pin, hm2_7i92.0.gpio.NNN.in_not
+#                       on the rig: every GPIO exports .in and .in_not
+#                       (hostmot2 ioport.c:250-263); MachineState.input_values
+#   the step timing     STEPGEN_TIMING_PARAMS of every enabled stepgen
+#                       (_stepgen_timing_names); MachineState.stepgen_timing
+
 
 # ---------------------------------------------------------------------------
 # Pure mapping
@@ -142,6 +149,10 @@ def map_linuxcnc_state(
 
     `stat` only needs the attributes listed in this module's docstring, so a
     plain object or SimpleNamespace works for tests.
+
+    The switch inputs come from hal_values keyed by each profile input's
+    hal_pin, the step timing from hal_values["stepgen_timing"], a sequence
+    of (HAL name, value) pairs (LinuxCncAdapter._read_live_hal).
 
     Drive power comes ONLY from hal_values["estop_input"], the physical chain
     input. stat.estop is not used for it: stat.estop is io.aux.estop
@@ -225,6 +236,13 @@ def map_linuxcnc_state(
         and int(getattr(stat, "interp_state", 1)) != 1,
         program_progress=float(hal_values.get("program_progress", 0.0)),
         message=str(hal_values.get("message", "")),
+        # A pin hal_values does not carry is None, unknown: never "free".
+        input_values=tuple(
+            (inp.hal_pin, _opt_bool(hal_values.get(inp.hal_pin))) for inp in profile.inputs
+        ),
+        stepgen_timing=tuple(
+            (name, _opt_int(value)) for name, value in hal_values.get("stepgen_timing", ())
+        ),
     )
 
 
@@ -310,6 +328,47 @@ def _read_profile_ini(profile: MachineProfile) -> Tuple[Any, Any]:
     from .configmodel import load_machine_config
 
     return load_machine_config(profile), _load_profile_ini(profile)
+
+
+def _num_stepgens(config: Any) -> Optional[int]:
+    """hostmot2's num_stepgens in [HOSTMOT2]CONFIG, or None when the INI
+    gives no count - without num_stepgens hostmot2 enables every stepgen the
+    firmware has (hostmot2.9:162-163), a number the INI does not hold."""
+    m = re.search(r"(?:^|\s)num_stepgens=(\d+)(?=\s|$)", config.hm2_config_string or "")
+    return int(m.group(1)) if m else None
+
+
+def _stepgen_line(config: Any) -> Optional[str]:
+    """The mock's "stepgens up" log line, counted from the INI: hostmot2's
+    num_stepgens (_num_stepgens) and the axes configmodel found. None when
+    the INI gives no count, so the mock never guesses."""
+    count = _num_stepgens(config)
+    if count is None or not config.axes:
+        return None
+    return "{} stepgen aktif, {} eksen jog ediyor".format(count, len(config.axes))
+
+
+#: The hostmot2 stepgen timing parameters, each a u32 in nanoseconds, HAL_RW
+#: (reference/linuxcnc/src/hal/drivers/mesa-hostmot2/stepgen.c:1066-1091).
+#: The driver turns each into clock ticks and resets a value the FPGA timer
+#: cannot hold to the maximum, writing that back into the parameter
+#: (stepgen.c:348-387): the live value is what the board runs.
+STEPGEN_TIMING_PARAMS = ("steplen", "stepspace", "dirsetup", "dirhold")
+
+
+def _stepgen_timing_names(config: Any) -> Tuple[str, ...]:
+    """The live timing parameters LinuxCncAdapter reads: every stepgen the
+    INI enables (_num_stepgens), under its board's HAL prefix ([HOSTMOT2]
+    BOARD, configmodel.MachineConfig.hal_prefix), in stepgen order. Empty
+    when the INI gives either no count or no board - never a guessed name."""
+    count = _num_stepgens(config)
+    if count is None or not config.hal_prefix:
+        return ()
+    return tuple(
+        "{}.stepgen.{:02d}.{}".format(config.hal_prefix, n, param)
+        for n in range(count)
+        for param in STEPGEN_TIMING_PARAMS
+    )
 
 
 def _joint_config(config: Any) -> Dict[int, Dict[str, Any]]:
@@ -456,12 +515,24 @@ class MockAdapter(MachineAdapter):
                 _now(), "hm2_eth: 7i92 bulundu, IDROM eşleşti (2 port × 17 = 34 IO)",
                 "hm2_eth", Severity.INFO,
             ),
-            AlarmEvent(
-                _now(), "Üç stepgen aktif, üç eksen jog ediyor", "hm2_7i92.0", Severity.INFO,
-            ),
         ]
+        stepgens = _stepgen_line(config)
+        if stepgens is not None:
+            self._alarms.append(AlarmEvent(_now(), stepgens, "hm2_7i92.0", Severity.INFO))
+        if profile.key == "test-rig":
+            # Why the rig has one stepgen more than it has axes. Until
+            # 2026-11-12 this line was the "Y DIR fault", an ERROR.
+            self._alarms.append(
+                AlarmEvent(
+                    _now(),
+                    "Y'nin iki motoru tek eklemde: stepgen.01 ve stepgen.03 aynı komutu "
+                    "alıyor (Y DIR arızası 2026-11-12'de çözüldü)",
+                    "docs/DURUM.md:12", Severity.INFO,
+                )
+            )
         # Driven by the INI's ASSUMPTION markers, so measuring the travel and
-        # deleting the markers withdraws it with no code change (iniload.py:18-19).
+        # deleting the markers withdraws it with no code change (the iniload
+        # module docstring).
         if not config.soft_limits_configured:
             self._alarms.append(
                 AlarmEvent(
@@ -469,16 +540,6 @@ class MockAdapter(MachineAdapter):
                     "Yumuşak limitler tanımsız — strok ölçülmedi, çarpışma koruması yok",
                     "config", Severity.WARN,
                 )
-            )
-        if profile.key == "test-rig":
-            self._alarms.insert(
-                0,
-                AlarmEvent(
-                    _now(),
-                    "Y ekseninin DIR hattında arıza — yön değişmiyor, hep öne gidiyor; "
-                    "yeri (kart klemensi, kablo ya da sürücü) ölçülmedi",
-                    "docs/DURUM.md:12", Severity.ERROR,
-                ),
             )
         self._program_file: Optional[str] = None
         self._running = False
@@ -792,6 +853,25 @@ LINK_NOT_RESTORED = (
     "Kartla bağlantı kurulamadı — makine açılamadı. Ethernet kablosunu ve "
     "kartın beslemesini kontrol edip tekrar «Yazılım sıfırla»ya basın."
 )
+#: After a stop this UI did not cause (_note_task_state).
+RESET_ACTION = "Sebep giderilince «Yazılım sıfırla»ya basın."
+
+# -- observer mode (app.py --observe) ----------------------------------------
+#: An action refused because the UI only observes: the machine is run from
+#: AXIS beside it, and nothing but the software estop leaves this UI
+#: (_not_while_observing).
+OBSERVE_REFUSAL = "Salt izleme — komut gönderilmedi; makine AXIS'ten kullanılıyor."
+#: LINK_ACTION in observer mode, which has no «Yazılım sıfırla»: AXIS's own
+#: reset clears neither the watchdog's has_bit, which holds the rig's estop
+#: latch open, nor io_error, with which this UI estops the machine again at
+#: every ON (_stop_on_link_fault). A LinuxCNC restart loads the driver anew,
+#: and the driver clears has_bit at load (watchdog.c:171).
+OBSERVE_LINK_ACTION = (
+    "Ethernet kablosunu ve kartın beslemesini kontrol edin, sonra LinuxCNC'yi "
+    "yeniden başlatın — salt izlemede bu ekran kart bağlantısını sıfırlayamaz."
+)
+#: RESET_ACTION in observer mode: the machine is switched back on in AXIS.
+OBSERVE_RESET_ACTION = "Sebep giderilince makineyi AXIS'ten açın."
 
 #: After io_error is cleared, how long the driver gets to report what it
 #: finds on the board. hm2_eth sets io_error, and only io_error, when the
@@ -938,15 +1018,40 @@ def _refused_without_status(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _not_while_observing(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Refuse a LinuxCncAdapter action in observer mode (observe=True)
+    before it reads, sends or runs halcmd: OBSERVE_REFUSAL becomes the
+    operator message and the action returns None, as a guarded action does
+    with the status lost.
+
+    app.Session already drops every action but the software estop in that
+    mode; this is the adapter's own line, for any caller that does not go
+    through Session. Every action guarded by _refused_without_status carries
+    it too (test_observe_and_live_hal pins that), so a new action cannot
+    send from an observer by forgetting it. software_estop does not: the
+    estop is the one command an observer sends.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: "LinuxCncAdapter", *args: Any, **kwargs: Any) -> Any:
+        if self._observe:
+            self._message = OBSERVE_REFUSAL
+            return None
+        return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class LinuxCncAdapter(MachineAdapter):
     """The real adapter.
 
     Tested against ui/tests/fake_linuxcnc.py, a fake `linuxcnc`/`hal` pair
     built from the LinuxCNC 2.9 bindings, task planner and motion source, and
     checked against that source by ui/tests/test_linuxcnc_adapter.py whenever
-    reference/ is present. It has still never run on a real machine: the fake
-    is only as right as our reading of the source, and real timing is not
-    measured.
+    reference/ is present. On a real machine it has only run view-only, beside
+    AXIS on 2026-11-12 with its commands cut by an out-of-repo viewer: the
+    fake is only as right as our reading of the source, and real timing is
+    not measured.
 
     Sequencing follows axis.py, the reference GUI
     (src/emc/usr_intf/axis/scripts/axis.py), with two deliberate differences:
@@ -976,6 +1081,15 @@ class LinuxCncAdapter(MachineAdapter):
     during another action's wait can end that wait early (see
     WAIT_TIMEOUT_S); the action's post-wait state check then refuses.
 
+    Observer mode (observe=True, app.py --observe), for running beside AXIS:
+    every action but software_estop is refused (_not_while_observing), so
+    the only commands that leave are the operator's estop and the link-fault
+    estop (_stop_on_link_fault), both STATE_ESTOP. No error channel is
+    opened: an NML error message goes to whichever reader polls first, and
+    draining it here would take it away from AXIS (_drain_errors). The
+    operator messages name AXIS or a restart, not «Yazılım sıfırla», as what
+    to do next.
+
     Usage on the machine:
 
         from bettercnc.adapter import LinuxCncAdapter
@@ -995,6 +1109,7 @@ class LinuxCncAdapter(MachineAdapter):
         sleep: Callable[[float], None] = time.sleep,
         halcmd: Callable[[List[str]], Tuple[bool, str]] = _run_halcmd,
         proc_root: str = "/proc",
+        observe: bool = False,
     ):
         try:
             import linuxcnc  # type: ignore
@@ -1024,10 +1139,18 @@ class LinuxCncAdapter(MachineAdapter):
         # progress on another thread. Each command() opens its own command and
         # status NML channels (Command_init, emcmodule.cc:817-838).
         self._estop_channel = linuxcnc.command()
-        self._error = linuxcnc.error_channel()
+        #: Observer mode: see the class docstring.
+        self._observe = observe
+        # None in observer mode: AXIS keeps LinuxCNC's error messages.
+        self._error = None if observe else linuxcnc.error_channel()
+        self._link_action = OBSERVE_LINK_ACTION if observe else LINK_ACTION
+        self._reset_action = OBSERVE_RESET_ACTION if observe else RESET_ACTION
         self._probe_status()
 
         config, ini = _read_profile_ini(profile)
+        #: Read by _read_live_hal at every snapshot, like the link pins.
+        self._input_pins = tuple(inp.hal_pin for inp in profile.inputs)
+        self._timing_names = _stepgen_timing_names(config)
         self._joint_config = (
             joint_config if joint_config is not None else _joint_config(config)
         )
@@ -1139,6 +1262,7 @@ class LinuxCncAdapter(MachineAdapter):
         hal_values = self._read_hal()
         self._stop_on_link_fault(s, hal_values)
         self._note_task_state(s.task_state, hal_values, errored)
+        hal_values.update(self._read_live_hal())
         return self._map(s, hal_values)
 
     def _stop_on_link_fault(self, s: Any, hal_values: Dict[str, Any]) -> None:
@@ -1168,7 +1292,7 @@ class LinuxCncAdapter(MachineAdapter):
             0, AlarmEvent(_now(), LINK_LOST + " (iletişim hatası; yazılımdan durduruldu)",
                           "hal", Severity.ERROR),
         )
-        self._message = "{}. {}".format(LINK_LOST, LINK_ACTION)
+        self._message = "{}. {}".format(LINK_LOST, self._link_action)
 
     def _note_task_state(self, task_state: int, hal_values: Dict[str, Any], errored: bool) -> None:
         """Say so when LinuxCNC leaves ON and the UI did not cause it.
@@ -1196,13 +1320,13 @@ class LinuxCncAdapter(MachineAdapter):
         if hal_values.get(LinkHealth.HAL_WATCHDOG_HAS_BIT) or hal_values.get(
             LinkHealth.HAL_IO_ERROR
         ):
-            text, action = LINK_LOST, LINK_ACTION
+            text, action = LINK_LOST, self._link_action
         elif task_state == L.STATE_ESTOP:
             text = "Makine acil stopa geçti — komut bu ekrandan gelmedi"
-            action = "Sebep giderilince «Yazılım sıfırla»ya basın."
+            action = self._reset_action
         else:
             text = "Makine kapatıldı — komut bu ekrandan gelmedi"
-            action = "Sebep giderilince «Yazılım sıfırla»ya basın."
+            action = self._reset_action
         self._alarms.insert(0, AlarmEvent(_now(), text, "task", Severity.ERROR))
         if not errored:
             self._message = "{}. {}".format(text, action)
@@ -1236,7 +1360,9 @@ class LinuxCncAdapter(MachineAdapter):
         """
         self._note_status_lost(exc)
         self._last_task_state = None
-        return self._map(_NO_STATUS, self._read_hal())._replace(
+        hal_values = self._read_hal()
+        hal_values.update(self._read_live_hal())
+        return self._map(_NO_STATUS, hal_values)._replace(
             status_known=False, positions=()
         )
 
@@ -1314,6 +1440,32 @@ class LinuxCncAdapter(MachineAdapter):
         out["connected"] = any(out[pin] is not None for pin in HAL_LINK_PINS)
         return out
 
+    def _read_live_hal(self) -> Dict[str, Any]:
+        """Read the switch inputs and the stepgen timing, as _read_hal reads
+        the link pins: hal.get_value, None for a name it cannot read, never a
+        default. Read separately from the link so the reset's link checks
+        (_clear_link_faults) do not read them on every turn.
+
+        The inputs land under their pin names, which map_linuxcnc_state looks
+        up per profile input; the timing as "stepgen_timing", (name, value)
+        pairs in stepgen order. Without the hal module nothing is read: the
+        inputs are then unknown, not free, and no timing is shown.
+        """
+        if self._hal is None:
+            return {}
+
+        def read(name: str) -> Any:
+            try:
+                return self._hal.get_value(name)
+            except RuntimeError:
+                # No component, or no such pin or parameter
+                # (halmodule.cc:1010-1014, 1078-1079).
+                return None
+
+        out: Dict[str, Any] = {pin: read(pin) for pin in self._input_pins}
+        out["stepgen_timing"] = tuple((name, read(name)) for name in self._timing_names)
+        return out
+
     def _drain_errors(self) -> bool:
         """Pull from error_channel into the alarm log, newest first. Returns
         whether an error kind was drained, i.e. whether the operator message
@@ -1327,7 +1479,14 @@ class LinuxCncAdapter(MachineAdapter):
         1588-1593) - counts as an ERROR and ends the drain. At most
         _MAX_ERRORS_PER_DRAIN messages are read per call; the rest wait for
         the next snapshot.
+
+        In observer mode there is no error channel and nothing is drained:
+        emcError is a "queue" buffer (configs/common/linuxcnc.nml:10), so a
+        message read here never reaches AXIS. LinuxCNC's refusals then show
+        in AXIS only.
         """
+        if self._error is None:
+            return False
         L = self._linuxcnc
         info_kinds = (L.NML_TEXT, L.NML_DISPLAY, L.OPERATOR_TEXT, L.OPERATOR_DISPLAY)
         errored = False
@@ -1506,6 +1665,7 @@ class LinuxCncAdapter(MachineAdapter):
         self._message = "MDI: {} — {}".format(command or "(boş)", entry.note)
         return entry
 
+    @_not_while_observing
     @_refused_without_status
     def _mdi_entry(self, command: str) -> MdiEntry:
         """send_mdi's checks and send; the MdiEntry to record."""
@@ -1562,6 +1722,7 @@ class LinuxCncAdapter(MachineAdapter):
             0, AlarmEvent(_now(), "Yazılım acil stop gönderildi", "task", Severity.ERROR)
         )
 
+    @_not_while_observing
     @_refused_without_status
     def software_estop_reset(self) -> None:
         """Clear the software estop and switch the machine on.
@@ -1829,6 +1990,7 @@ class LinuxCncAdapter(MachineAdapter):
                 return s
             self._sleep(min(_RESET_POLL_INTERVAL_S, remaining))
 
+    @_not_while_observing
     @_refused_without_status
     def home_all(self) -> None:
         """Start homing. Not waited for: task reports DONE only when the whole
@@ -1866,6 +2028,7 @@ class LinuxCncAdapter(MachineAdapter):
         self._send().home(-1)
         self._message = "Referans alma başlatıldı."
 
+    @_not_while_observing
     @_refused_without_status
     def jog(self, axis: str, direction: int) -> None:
         L = self._linuxcnc
@@ -1905,6 +2068,7 @@ class LinuxCncAdapter(MachineAdapter):
             "eklem" if jjogmode else "eksen",
         )
 
+    @_not_while_observing
     @_refused_without_status
     def load_program(self, path: str) -> None:
         """Open a G-code file, as axis.py's open_file_guts does (:1174-1208).
@@ -1959,6 +2123,7 @@ class LinuxCncAdapter(MachineAdapter):
             return
         self._message = "{} yüklendi.".format(path)
 
+    @_not_while_observing
     @_refused_without_status
     def program_start(self) -> None:
         L = self._linuxcnc
@@ -1979,6 +2144,7 @@ class LinuxCncAdapter(MachineAdapter):
         self._send().auto(L.AUTO_RUN, 0)
         self._message = "Program başlatıldı: {}".format(s.file)
 
+    @_not_while_observing
     @_refused_without_status
     def program_stop(self) -> None:
         """abort() first, unconditionally: stopping must not wait on a read.
@@ -2003,6 +2169,7 @@ class LinuxCncAdapter(MachineAdapter):
             return
         self._jog_step = mm
 
+    @_not_while_observing
     @_refused_without_status
     def set_feed_override(self, pct: int) -> None:
         """Feed override in percent, sent as command.feedrate(scale) the way

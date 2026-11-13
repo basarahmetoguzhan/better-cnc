@@ -148,10 +148,13 @@ The **`?`** column marks how the vendor terminal label was established:
 - **~** — inferred from the module instance mapping in the dump. The FPGA function is
   certain; that the vendor routed that specific terminal to that specific pin is a
   reasonable inference, not a measurement.
+- **R** — confirmed on the test rig by motion: commanding that StepGen moves the motor wired
+  to that terminal (a Dir pin also reverses it). IO 4–6, 8 and 9 since 2026-08-05; IO 7, 10
+  and 11 on 2026-11-12, once each driver had an output of its own (see "Six StepGens" below).
 
 "HAL pin, as configured" reflects **our** config string
-(`num_stepgens=3 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx`), under which
-everything except StepGen 0–2 falls back to GPIO.
+(`num_stepgens=4 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx`, `test-rig.ini:193`, since
+2026-11-12; `num_stepgens=3` before), under which everything except StepGen 0–3 falls back to GPIO.
 
 | IO | Port | Conn pin | Secondary function (from dump) | Vendor terminal | ? | HAL pin, as configured |
 |---:|---|---:|---|---|:-:|---|
@@ -159,14 +162,14 @@ everything except StepGen 0–2 falls back to GPIO.
 | **1** | P2 | 14 | SSerial 0 · TXData0 (Out) | Smart Serial RJ45 | ~ | `hm2_7i92.0.gpio.001.in` / `.in_not` / `.out` |
 | **2** | P2 | 2 | SSerial 0 · RXData1 (In) | Smart Serial RJ45 | ~ | `hm2_7i92.0.gpio.002.in` / `.in_not` / `.out` |
 | **3** | P2 | 15 | SSerial 0 · TXData1 (Out) | Smart Serial RJ45 | ~ | `hm2_7i92.0.gpio.003.in` / `.in_not` / `.out` |
-| **4** | P2 | 3 | StepGen 0 · Step/Table1 (Out) | AXIS 0 STEP | ~ | `hm2_7i92.0.stepgen.00.*` |
-| **5** | P2 | 16 | StepGen 0 · Dir/Table2 (Out) | AXIS 0 DIR | ~ | `hm2_7i92.0.stepgen.00.*` |
-| **6** | P2 | 4 | StepGen 1 · Step/Table1 (Out) | AXIS 1 STEP | ~ | `hm2_7i92.0.stepgen.01.*` |
-| **7** | P2 | 17 | StepGen 1 · Dir/Table2 (Out) | AXIS 1 DIR | ~ | `hm2_7i92.0.stepgen.01.*` |
-| **8** | P2 | 5 | StepGen 2 · Step/Table1 (Out) | AXIS 2 STEP | ~ | `hm2_7i92.0.stepgen.02.*` |
-| **9** | P2 | 6 | StepGen 2 · Dir/Table2 (Out) | AXIS 2 DIR | ~ | `hm2_7i92.0.stepgen.02.*` |
-| **10** | P2 | 7 | StepGen 3 · Step/Table1 (Out) | AXIS 3 STEP | ~ | `hm2_7i92.0.gpio.010.in` / `.in_not` / `.out` |
-| **11** | P2 | 8 | StepGen 3 · Dir/Table2 (Out) | AXIS 3 DIR | ~ | `hm2_7i92.0.gpio.011.in` / `.in_not` / `.out` |
+| **4** | P2 | 3 | StepGen 0 · Step/Table1 (Out) | AXIS 0 STEP | R | `hm2_7i92.0.stepgen.00.*` |
+| **5** | P2 | 16 | StepGen 0 · Dir/Table2 (Out) | AXIS 0 DIR | R | `hm2_7i92.0.stepgen.00.*` |
+| **6** | P2 | 4 | StepGen 1 · Step/Table1 (Out) | AXIS 1 STEP | R | `hm2_7i92.0.stepgen.01.*` |
+| **7** | P2 | 17 | StepGen 1 · Dir/Table2 (Out) | AXIS 1 DIR | R | `hm2_7i92.0.stepgen.01.*` |
+| **8** | P2 | 5 | StepGen 2 · Step/Table1 (Out) | AXIS 2 STEP | R | `hm2_7i92.0.stepgen.02.*` |
+| **9** | P2 | 6 | StepGen 2 · Dir/Table2 (Out) | AXIS 2 DIR | R | `hm2_7i92.0.stepgen.02.*` |
+| **10** | P2 | 7 | StepGen 3 · Step/Table1 (Out) | AXIS 3 STEP | R | `hm2_7i92.0.stepgen.03.*` |
+| **11** | P2 | 8 | StepGen 3 · Dir/Table2 (Out) | AXIS 3 DIR | R | `hm2_7i92.0.stepgen.03.*` |
 | **12** | P2 | 9 | StepGen 4 · Step/Table1 (Out) | AXIS 4 STEP | ~ | `hm2_7i92.0.gpio.012.in` / `.in_not` / `.out` |
 | **13** | P2 | 10 | StepGen 4 · Dir/Table2 (Out) | AXIS 4 DIR | ~ | `hm2_7i92.0.gpio.013.in` / `.in_not` / `.out` |
 | **14** | P2 | 11 | StepGen 5 · Step/Table1 (Out) | AXIS 5 STEP | ~ | `hm2_7i92.0.gpio.014.in` / `.in_not` / `.out` |
@@ -211,16 +214,22 @@ helpful piece of board design.
 StepGen 0 Dir, and so on. This is the *opposite* of the Dir-before-Step order that docs/03
 found in pncconf's stock 7i96 data — one more reason that document does not transfer.
 
-**Six StepGens, and we use three.** StepGen 3–5 (IO 10–15) are disabled by
-`num_stepgens=3` and become GPIO. On the marble machine, if the dual-motor gantry Y turns
-out to be real (blocker B1), StepGen 3 is available at IO 10/11 without any firmware
-change.
+**Six StepGens, and we use four.** Since 2026-11-12 StepGen 3 (IO 10/11, terminal AXIS 3)
+drives the test rig's second Y driver: Y has two motors on two TB6560s, and one 3.3 V output
+cannot drive two optocouplers — with both drivers on AXIS 1, DIR's high level read 2.43 V
+against 3.11 V on X's single-driver AXIS 0, and neither driver changed direction
+([09](09-tb6560-drivers.md)). StepGen 3 gets exactly what StepGen 1 gets (one joint, two step
+generators, no separate homing); in the scale check both gantry sides moved about 50 mm (left
+50.3, right 49.7), which confirms AXIS 3 = StepGen 3 physically. StepGen 4–5 (IO 12–15) are
+disabled by `num_stepgens=4` and become GPIO. On the marble machine, a dual-motor gantry Y
+(blocker B1) would use StepGen 3 the same way, without any firmware change — as a joint of its
+own, for squaring.
 
 ---
 
 ## GPIO budget under our config
 
-`CONFIG = "num_stepgens=3 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx"`
+`CONFIG = "num_stepgens=4 num_encoders=0 num_pwmgens=0 sserial_port_0=xxxxxxxx"` (`test-rig.ini:193`, since 2026-11-12)
 
 An IO pin whose owning module is not instantiated is exported as a full GPIO pin
 ([hostmot2.adoc:400-401](../reference/linuxcnc/docs/src/drivers/hostmot2.adoc#L400-L401)):
@@ -228,15 +237,16 @@ An IO pin whose owning module is not instantiated is exported as a full GPIO pin
 | Pins | Why they are GPIO | Count |
 |---|---|---:|
 | IO 0–3 | SSerial disabled by `sserial_port_0=xxxxxxxx` | 4 |
-| IO 10–15 | StepGen 3–5 not instantiated (`num_stepgens=3`) | 6 |
+| IO 12–15 | StepGen 4–5 not instantiated (`num_stepgens=4`) | 4 |
 | IO 16 | PWM not instantiated (`num_pwmgens=0`) | 1 |
 | IO 17–24 | **permanently GPIO — no secondary tag exists** | 8 |
 | IO 25–33 | QCount not instantiated (`num_encoders=0`) | 9 |
-| | **GPIO total** | **28** |
-| IO 4–9 | consumed by StepGen 0–2 | 6 |
+| | **GPIO total** | **26** |
+| IO 4–11 | consumed by StepGen 0–3 | 8 |
 | | **Total** | **34** ✓ |
 
-**28 of 34 pins are available as GPIO.** That is the finding that resolves the marble
+**26 of 34 pins are available as GPIO** (28 until 2026-11-12, when StepGen 3 went to Y's
+second motor; the inputs are unaffected). That is the finding that resolves the marble
 machine's input-budget problem — see [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B2.
 
 **The caveat that keeps B2 from being fully closed:** FPGA-level availability says nothing
@@ -267,15 +277,17 @@ the wiring beyond the connector.
 
 | Open | Why the dumps cannot answer it |
 |---|---|
-| Which end of **Y** is the + end (`gpio.022` rear / `gpio.023` front) | Y does not change direction — Y+ and Y− move the same way (open DIR fault, location not yet measured; [DURUM.md:12](DURUM.md), [PLAN-BUGUN.md](PLAN-BUGUN.md) phase 1) |
 | Encoder terminal front-end characteristics | Requires an ohmmeter on an unpowered board |
-| Whether AXIS 3–5 route to StepGen 3–5, and whether the AXIS 1 `DIR` terminal is really driven by IO 7 | AXIS 3–5: requires commanding one stepgen at a time, with the test motor not coupled to any mechanics. AXIS 1 `DIR`: Y does not change direction — open fault, location (board terminal, cable or driver) not yet measured ([PLAN-BUGUN.md](PLAN-BUGUN.md) phase 1) |
-| Actual axis travel | Requires a rule |
+| Whether AXIS 4–5 route to StepGen 4–5 | Requires commanding one stepgen at a time, with the test motor not coupled to any mechanics |
 
-**Since verified on the rig** ([DURUM.md:69-82](DURUM.md); noted here 2026-10-18):
+**Since verified on the rig** ([DURUM.md:69-82](DURUM.md); noted here 2026-10-18, updated 2026-11-12):
 switch positions, each switch triggered by hand — `gpio.020` X right (= X max, since X+ is
-right), `gpio.021` X left, `gpio.022` Y rear, `gpio.023` Y front, `gpio.024` Z top, no
+right), `gpio.021` X left, `gpio.022` Y rear (= Y max, since Y+ is rear), `gpio.023` Y front, `gpio.024` Z top, no
 Z-bottom switch; polarity — idle `.in = TRUE`, pressed FALSE → use `.in_not` for the rig's switches (not board-universal: an NC series chain, as planned for the marble machine, reads the other way). By jogging:
-AXIS 0 and AXIS 2 drive X and Z in both directions (`stepgen.00` / `stepgen.02`), and
-AXIS 1 STEP drives Y (`stepgen.01`), but Y's direction does not change. The switch nets are
-not yet connected in HAL.
+AXIS 0 and AXIS 2 drive X and Z in both directions (`stepgen.00` / `stepgen.02`). AXIS 1
+(`stepgen.01`) and AXIS 3 (`stepgen.03`) each drive one of Y's two motors, in both directions,
+since 2026-11-12 — before that both Y drivers hung on AXIS 1 and neither saw a direction change
+(the "Y DIR fault", [DURUM.md:12](DURUM.md)). So the AXIS 1 `DIR` terminal is driven by IO 7,
+and AXIS 3 by IO 10/11. The switch nets are connected in HAL (`test-rig.hal:301-327`, `.in_not`)
+and each switch trips its joint's limit. Travel, switch trip to switch trip: X 403.4 mm,
+Y 391.3 mm; Z top switch to table about 100 mm (soft limits X 3..399, Y 3..387, Z −96.5..−3).

@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import threading
 import types
 import unittest
 
-from helpers import all_html, html, rig_profile, session, strip_markers, view
+from helpers import (
+    all_html,
+    html,
+    ini_raw_values,
+    provisional_travel,
+    rig_profile,
+    session,
+    strip_markers,
+    view,
+)
 
 from bettercnc import mdi as M
+from bettercnc import viewmodel as VM
 from bettercnc.adapter import (
     TASK_STATE_ESTOP,
     TASK_STATE_ESTOP_RESET,
@@ -25,7 +36,7 @@ from bettercnc.adapter import (
 from bettercnc.capabilities import Capability, present
 from bettercnc.configmodel import joint_config_from_profile, load_machine_config
 from bettercnc.profiles import load_profile
-from bettercnc.state import DrivePower, HomingPhase
+from bettercnc.state import DrivePower, HomingPhase, Severity
 
 #: Upper bound for every wait in the threaded test; never reached unless the
 #: lock it checks is missing.
@@ -177,6 +188,81 @@ class TestMdiTextEntry(unittest.TestCase):
         markup = html("test-rig", "kontrol", adapter=adapter)
         self.assertNotIn("<script>alert(1)</script>", markup)
         self.assertIn("&lt;script&gt;", markup)
+
+
+class TestMdiPresets(unittest.TestCase):
+    """The preset chips are commands LinuxCNC accepts on this machine. The
+    prototype's "G0 Z5" and "G53 G0 Z0" lie above the test rig's Z window
+    (its G54 offsets are zero), so motion refuses both there."""
+
+    @staticmethod
+    def presets(profile="test-rig"):
+        return view(profile, "kontrol")["kontrol"]["mdi"]["presets"]
+
+    @staticmethod
+    def moves(presets):
+        return [p for p in presets if M._needs_homing(p)]
+
+    def test_each_move_is_a_g53_target_inside_both_ini_windows(self):
+        """Read with the tests' own INI reader. The UI reads [JOINT_2]; motion
+        checks [AXIS_Z] as well."""
+        ini = ini_raw_values()
+        windows = [
+            (float(ini[s + ".MIN_LIMIT"]), float(ini[s + ".MAX_LIMIT"]))
+            for s in ("JOINT_2", "AXIS_Z")
+        ]
+        moves = self.moves(self.presets())
+        self.assertEqual(len(moves), 1)  # the rig's Z travel is measured
+        for p in moves:
+            with self.subTest(preset=p):
+                m = re.fullmatch(r"G53 G0 Z(-?\d+(?:\.\d+)?)", p)
+                self.assertIsNotNone(m, p)
+                z = float(m.group(1))
+                for low, high in windows:
+                    self.assertTrue(low <= z <= high, (low, z, high))
+
+    def test_the_prototype_presets_are_gone(self):
+        for profile in ("test-rig", "marble"):
+            with self.subTest(profile=profile):
+                presets = self.presets(profile)
+                self.assertNotIn("G0 Z5", presets)
+                self.assertNotIn("G53 G0 Z0", presets)
+
+    def test_z_target_follows_the_ini(self):
+        profile = rig_profile(self, edits={("JOINT_2", "MAX_LIMIT"): "-2.5"})
+        self.assertIn("G53 G0 Z-2.5", self.presets(profile))
+
+    def test_no_z_move_without_measured_travel(self):
+        """No window, no target: the marble profile has no INI, and
+        provisional limits are no measured window."""
+        cases = (
+            ("marble", "marble"),
+            ("provisional travel", rig_profile(self, transform=provisional_travel)),
+        )
+        for label, profile in cases:
+            with self.subTest(case=label):
+                self.assertEqual(self.presets(profile), ["M5", "G92.1"])
+
+    def test_presets_reach_the_markup(self):
+        markup = html("test-rig", "kontrol")
+        for p in self.presets():
+            with self.subTest(preset=p):
+                self.assertIn('data-value="{}"'.format(p), markup)
+
+    def test_g_code_numbers_read_back_exactly(self):
+        cases = ((-3.0, "-3"), (-96.5, "-96.5"), (399.0, "399"), (0.0, "0"),
+                 (0.1, "0.1"), (12.3456789, "12.3456789"))
+        for value, text in cases:
+            with self.subTest(value=value):
+                self.assertEqual(VM._gcode_number(value), text)
+                self.assertEqual(float(text), value)
+
+    def test_no_g_code_number_where_g_code_has_none(self):
+        """The G-code reader takes no exponent, so repr's 1e-05 or 1e+16
+        would not parse; inf and nan are no position."""
+        for value in (1e-05, 1e16, float("inf"), float("-inf"), float("nan")):
+            with self.subTest(value=value):
+                self.assertIsNone(VM._gcode_number(value))
 
 
 class TestProbeIsNotATool(unittest.TestCase):
@@ -627,21 +713,52 @@ class TestMdiRefusal(unittest.TestCase):
 
 
 class TestMockFollowsTheIni(unittest.TestCase):
-    """iniload.py:18-19: deleting the ASSUMPTION markers once travel is
-    measured must update the UI with no code change - the mock's alarm log
-    included."""
+    """The iniload module docstring: deleting the ASSUMPTION markers once
+    travel is measured must update the UI with no code change - the mock's
+    alarm log included. test-rig.ini lost its markers on 2026-11-12 (Faz 4);
+    the unmeasured direction runs on a copy with them put back."""
 
     ALARM = "Yumuşak limitler tanımsız — strok ölçülmedi, çarpışma koruması yok"
 
     def test_soft_limit_alarm_while_travel_is_unmeasured(self):
-        adapter = MockAdapter(load_profile("test-rig"))
+        profile = rig_profile(self, transform=provisional_travel)
+        self.assertFalse(load_machine_config(profile).soft_limits_configured)  # premise
+        adapter = MockAdapter(profile)
         self.assertIn(self.ALARM, [a.text for a in adapter.snapshot().alarms])
 
     def test_soft_limit_alarm_gone_once_the_markers_are_removed(self):
-        profile = rig_profile(self, transform=strip_markers)
-        self.assertTrue(load_machine_config(profile).soft_limits_configured)
-        adapter = MockAdapter(profile)
-        self.assertNotIn(self.ALARM, [a.text for a in adapter.snapshot().alarms])
+        """The real INI, and the provisional copy with the markers deleted."""
+        for profile in (load_profile("test-rig"),
+                        rig_profile(self, transform=lambda t: strip_markers(provisional_travel(t)))):
+            with self.subTest(ini=profile.ini_path):
+                self.assertTrue(load_machine_config(profile).soft_limits_configured)
+                adapter = MockAdapter(profile)
+                self.assertNotIn(self.ALARM, [a.text for a in adapter.snapshot().alarms])
+
+    def test_seed_log_counts_the_stepgens_the_ini_enables(self):
+        """The seed said "Üç stepgen aktif" after [HOSTMOT2]CONFIG went to
+        num_stepgens=4 for Y's second motor (2026-11-12). The count is the
+        INI's now; an INI without one gets no line rather than a guess."""
+        profile = load_profile("test-rig")
+        config = load_machine_config(profile)
+        count = int(re.search(r"num_stepgens=(\d+)", config.hm2_config_string).group(1))
+        texts = [a.text for a in MockAdapter(profile).snapshot().alarms]
+        self.assertIn("{} stepgen aktif, {} eksen jog ediyor".format(count, len(config.axes)), texts)
+        self.assertNotIn("Üç stepgen aktif, üç eksen jog ediyor", texts)
+        uncounted = rig_profile(self, {("HOSTMOT2", "CONFIG"): '"num_encoders=0 num_pwmgens=0"'})
+        texts = [a.text for a in MockAdapter(uncounted).snapshot().alarms]
+        self.assertFalse(any("stepgen aktif" in t for t in texts), texts)
+
+    def test_seed_log_holds_no_active_fault(self):
+        """The Y DIR fault was seeded as an ERROR until Faz 1 solved it: its
+        line now says what the fix was (Y's second driver on stepgen.03)."""
+        snap = MockAdapter(load_profile("test-rig")).snapshot()
+        self.assertEqual([a.text for a in snap.alarms if a.severity is Severity.ERROR], [])
+        y = [a for a in snap.alarms if "stepgen.03" in a.text]
+        self.assertEqual(len(y), 1)
+        self.assertIs(y[0].severity, Severity.INFO)
+        self.assertIn("çözüldü", y[0].text)
+        self.assertNotIn("yön değişmiyor", " ".join(a.text for a in snap.alarms))
 
     def test_link_servo_period_is_the_ini_value(self):
         profile = rig_profile(self, {("EMCMOT", "SERVO_PERIOD"): "500000"})

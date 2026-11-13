@@ -47,7 +47,15 @@ import tempfile
 import types
 import unittest
 
-from helpers import ALL_SCREENS, REPO_ROOT, TEST_RIG_INI, UI_DIR, ini_raw_values, session
+from helpers import (
+    ALL_SCREENS,
+    REPO_ROOT,
+    TEST_RIG_INI,
+    UI_DIR,
+    ini_raw_values,
+    provisional_travel,
+    session,
+)
 
 from bettercnc import render as R
 from bettercnc import viewmodel as VM
@@ -227,13 +235,17 @@ class TestMeasuredTravelReachesTheScreen(unittest.TestCase):
 
     test_unmeasured.py checks only half of that promise: that the parser stops
     flagging the keys. Nothing checked that the numbers actually reach the DRO
-    and the Makine screen, or that the "KORUMA YOK" banner goes away. Here the
-    real test-rig.ini goes through exactly that edit.
+    and the Makine screen, or that the "KORUMA YOK" banner goes away. Here
+    test-rig.ini goes through exactly that edit - from a copy with the markers
+    it had until Faz 4 put back (helpers.provisional_travel), since the real
+    file lost them when the travel was measured (2026-11-12).
     """
 
     def setUp(self):
         self.original = ini_raw_values()
-        self.profile = _profile_for_ini(self, _strip_markers(_test_rig_text()))
+        self.profile = _profile_for_ini(
+            self, _strip_markers(provisional_travel(_test_rig_text()))
+        )
         # Premise 1: the edit changed comments only. Every key/value is the same,
         # read with the independent parser in helpers.py.
         self.assertEqual(ini_raw_values(self.profile.ini_path), self.original)
@@ -533,11 +545,14 @@ class TestIniCommentRuns(unittest.TestCase):
                 self.assertIn("ASSUMPTION: travel guessed.", value.comment)
 
     def test_stray_line_above_the_real_limits_keeps_the_travel_unmeasured(self):
-        """The same rule end to end on the real test-rig.ini: a stray line
-        inserted right above each MIN_LIMIT must not light the travel up.
-        (Six lines: three [JOINT_n] and three [AXIS_*] carry MIN_LIMIT.)"""
+        """The same rule end to end on test-rig.ini with its travel marked
+        provisional (helpers.provisional_travel: the marker sits right above
+        each MIN_LIMIT): a stray line inserted between the marker and
+        MIN_LIMIT must not light the travel up. (Six lines: three [JOINT_n]
+        and three [AXIS_*] carry MIN_LIMIT.)"""
         text = re.sub(
-            r"(?m)^(MIN_LIMIT\s*=)", "STRAY_LINE_WITHOUT_EQUALS 1 2 3\n\\1", _test_rig_text()
+            r"(?m)^(MIN_LIMIT\s*=)", "STRAY_LINE_WITHOUT_EQUALS 1 2 3\n\\1",
+            provisional_travel(_test_rig_text()),
         )
         self.assertEqual(text.count("STRAY_LINE_WITHOUT_EQUALS"), 6)  # premise
         cfg = load_machine_config(_profile_for_ini(self, text))
@@ -756,13 +771,15 @@ class TestIniRepeats(unittest.TestCase):
                 self.assertEqual((v.raw, v.provisional), ("150.0", provisional))
 
     def test_appended_corrections_do_not_reach_the_screens(self):
-        """End to end on the test rig's INI: a second SERVO_PERIOD line and a
-        second [JOINT_0] with unmarked limits change nothing LinuxCNC reads.
-        With last-wins, X's travel showed as measured (-5 to 5) and the servo
+        """End to end on the test rig's INI, its travel marked provisional
+        (helpers.provisional_travel): a second SERVO_PERIOD line and a second
+        [JOINT_0] with unmarked limits change nothing LinuxCNC reads. With
+        last-wins, X's travel showed as measured (-5 to 5) and the servo
         period as 0.5 ms."""
         original = ini_raw_values()
         text, n = re.subn(
-            r"(?m)^(SERVO_PERIOD\s*=.*)$", r"\1\nSERVO_PERIOD = 500000", _test_rig_text()
+            r"(?m)^(SERVO_PERIOD\s*=.*)$", r"\1\nSERVO_PERIOD = 500000",
+            provisional_travel(_test_rig_text()),
         )
         self.assertEqual(n, 1)  # premise: the edit landed inside [EMCMOT]
         text += "\n[JOINT_0]\nSCALE = 999.0\nMIN_LIMIT = -5.0\nMAX_LIMIT = 5.0\n"
@@ -771,6 +788,10 @@ class TestIniRepeats(unittest.TestCase):
         x = cfg.axis("X")
         self.assertEqual(x.scale_steps_per_mm, float(original["JOINT_0.SCALE"]))
         self.assertFalse(x.travel.measured)
+        self.assertEqual(
+            (x.travel.min_limit, x.travel.max_limit),
+            (float(original["JOINT_0.MIN_LIMIT"]), float(original["JOINT_0.MAX_LIMIT"])),
+        )
         period = "{:g} ms".format(float(original["EMCMOT.SERVO_PERIOD"]) / 1e6)
         m = _build(profile, "makine")["makine"]
         self.assertEqual(_rows(m["config_rows"])["Servo döngü"], period)
@@ -914,8 +935,23 @@ class TestProfileTravelFollowsTheIni(unittest.TestCase):
         validate_profile(profile)  # the catalogue rules still hold either way
         return profile.capability(Capability.SOFT_LIMITS)
 
-    def test_real_ini_still_reports_unmeasured_travel(self):
+    def test_real_ini_reports_measured_travel(self):
+        """test-rig.ini since Faz 4 (2026-11-12): no marker left."""
         profile = load_profile("test-rig")
+        cap = self._soft_limits(profile)
+        self.assertIs(cap.presence, Presence.PRESENT)
+        self.assertEqual(cap.reason, "")
+        self.assertIn("configs/test-rig/test-rig.ini", cap.source)
+        self.assertTrue(profile.travel_measured)
+        self.assertIn("referans alındıktan sonra", profile.missing_switches[0].consequence)
+        for screen in VM.SCREENS:
+            with self.subTest(screen=screen[0]):
+                self.assertFalse(_says_travel_unmeasured(R.render_body(_build(profile, screen[0]))))
+
+    def test_provisional_ini_reports_unmeasured_travel(self):
+        """The same INI with its travel marked ASSUMPTION again
+        (helpers.provisional_travel): what the real one said until Faz 4."""
+        profile = _profile_for_ini(self, provisional_travel(_test_rig_text()))
         cap = self._soft_limits(profile)
         self.assertIs(cap.presence, Presence.ABSENT)
         self.assertEqual(
@@ -924,13 +960,14 @@ class TestProfileTravelFollowsTheIni(unittest.TestCase):
             "— gerçek çarpışma koruması yok.",
         )
         self.assertTrue(cap.requirement)
-        self.assertIn("configs/test-rig/test-rig.ini", cap.source)
+        self.assertIn("ASSUMPTION blokları", cap.source)
         self.assertFalse(profile.travel_measured)
         self.assertIn("strok ölçülmediği için tanımsız", profile.missing_switches[0].consequence)
         self.assertTrue(_says_travel_unmeasured(R.render_body(_build(profile, "kontrol"))))
 
     def test_markers_removed_reports_measured_travel_everywhere(self):
-        profile = _profile_for_ini(self, _strip_markers(_test_rig_text()))
+        """The edit itself, on the provisional copy."""
+        profile = _profile_for_ini(self, _strip_markers(provisional_travel(_test_rig_text())))
         cap = self._soft_limits(profile)
         self.assertIs(cap.presence, Presence.PRESENT)
         self.assertEqual(cap.reason, "")

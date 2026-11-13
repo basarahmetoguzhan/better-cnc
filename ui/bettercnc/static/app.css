@@ -110,6 +110,9 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .kv-v { font-family: var(--mono); font-size: 12px; margin-left: auto; text-align: right; }
 .kv-note { color: var(--warn); font-size: 11px; width: 100%; }
 .hal { color: var(--muted-dim); font-size: 11px; }
+/* Long values (the live step timing): the note gets a line of its own. */
+.kv-wrap .kv { flex-wrap: wrap; }
+.kv-wrap .kv-v { white-space: nowrap; }
 
 /* ---- banners ---- */
 
@@ -123,6 +126,12 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .banner-text { color: #cfd3e5; }
 .banner[data-severity="error"] { background: #241a22; }
 .banner[data-severity="warn"] { background: #241f1a; }
+
+/* Observer mode (app.py --observe): on top of every screen, and kept in
+   view while the screen scrolls. */
+.observe { position: sticky; top: 0; z-index: 5; background: var(--bg); padding-bottom: 4px; }
+.observe .banner { margin-top: 0; font-size: 13.5px; }
+.observe .banner-text { color: var(--fg); font-weight: 600; }
 
 /* ---- estop ---- */
 
@@ -226,13 +235,15 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 /* ---- inputs / alarms ---- */
 
 .in-row {
-  display: grid; grid-template-columns: 84px 1fr 190px 150px; gap: 10px;
+  display: grid; grid-template-columns: 84px 1fr 190px 150px 80px; gap: 10px;
   align-items: baseline; padding: 6px 0; border-bottom: 1px solid #21232f;
 }
 .in-row.head { color: var(--muted-dim); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
 .in-pin { font-family: var(--mono); font-size: 12.5px; color: var(--acc-light); }
 .in-label { font-size: 13px; }
 .in-pol { font-size: 11px; color: var(--muted-dim); }
+.in-state { font-family: var(--mono); font-size: 12.5px; font-weight: 600; text-align: right; }
+.in-note { color: var(--muted-dim); font-size: 11.5px; margin-top: 6px; line-height: 1.5; }
 
 .ev { display: grid; grid-template-columns: 48px 1fr auto; gap: 10px; padding: 7px 0; border-bottom: 1px solid #21232f; align-items: baseline; }
 .ev-t { font-family: var(--mono); font-size: 11.5px; color: var(--muted-dim); }

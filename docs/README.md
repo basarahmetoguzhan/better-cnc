@@ -1,7 +1,7 @@
 # better-cnc — documentation index
 
 Retrofit of a 3-axis industrial marble CNC from a Windows controller to
-LinuxCNC on a PC — today an amd64 laptop booted from a LinuxCNC 2.9.10 PREEMPT_RT live USB
+LinuxCNC on a PC — today an amd64 PC (a laptop in 2026-08, an MSI desktop since 2026-11-12) booted from a LinuxCNC 2.9.10 PREEMPT_RT live USB
 (the marble machine's final controller is a Raspberry Pi 4, decided 2026-10-19; the Pi 3 was ruled out) — driving a
 **Zhulong V2.0** Ethernet motion board
 (a Mesa **7i92** derivative — Spartan-6 XC6SLX9, Micrel KSZ8851 PHY, `hm2_eth`,
@@ -21,18 +21,21 @@ actually is, then [PLAN-BUGUN.md](PLAN-BUGUN.md) for what is left to do on the t
 | **DERIVED** | Written from LinuxCNC source reading and/or photographs. Cited, internally consistent — but **never executed or measured against real hardware.** |
 | **VERIFIED** | Confirmed against the physical board or a running system. |
 
-> ## ⚠️ The BOARD is verified. The MACHINE only partly.
+> ## ⚠️ The BOARD is verified. The test-rig MACHINE now largely too (phases 1–8, 2026-11-12).
 >
 > **Updated 2026-08-05.** The board has been powered, detected and fully interrogated —
 > dumps are in [board-dumps/](board-dumps/). Pin map, module inventory, HAL prefix and
 > clock are now **measured facts**, recorded in [10](10-7i92-pinout-verified.md).
 >
-> On the **test rig**, as of 2026-08-05: the config runs, all three axes jog (X+ = right,
-> Z+ = up), and every switch's position and polarity were verified by hand (idle `.in` = TRUE →
-> the rig's HAL uses `.in_not` — a fact about this rig's switches, not the board: the NC chain
-> planned for the marble machine reads the opposite way; Z has no bottom switch). See [DURUM.md](DURUM.md). Still DERIVED or
-> unknown: travel limits, scale accuracy, Y direction (an active DIR fault) and therefore which
-> Y switch is the + end, real step timing, homing (never attempted).
+> On the **test rig**, as of 2026-11-12, phases 1–8 passed. The Y DIR fault is fixed (Y has two
+> motors on two TB6560s; the second moved to AXIS 3 = `stepgen.03`, `num_stepgens=4`), the directions
+> are X+ = right, Y+ = rear, Z+ = up, `SCALE` is measured (X 100.085, Y 98.592, Z 122.274 steps/mm —
+> GRBL's values were ~8.3× / 10.2× too high), travel is measured (soft limits X 3..399, Y 3..387,
+> Z −96.5..−3 mm), the switch nets are live (idle `.in` = TRUE → the rig's HAL uses `.in_not` — a fact
+> about this rig's switches, not the board: the NC chain planned for the marble machine reads the
+> opposite way; Z has no bottom switch), homing repeats, soft limits refuse out-of-range MDI, and a
+> first program ran. See [DURUM.md](DURUM.md). Still unknown: real step timing (never scoped), whether
+> Y's two gantry sides stay square, and the cause of a small one-way Z drift.
 >
 > ### 🛑 And the headline correction: the board is a **7i92**, not a 7i96.
 >
@@ -48,8 +51,8 @@ actually is, then [PLAN-BUGUN.md](PLAN-BUGUN.md) for what is left to do on the t
 | # | Document | What it is | Status |
 |---|---|---|---|
 | — | [README.md](README.md) | This index. | **DERIVED** |
-| — | [DURUM.md](DURUM.md) | **Session state — read this first.** Working environment, verified board facts, the hand-verified switch map, completed and next steps. In Turkish. Machine state as of 2026-08-05 (doc corrections and the Zhulong decision 2026-10-18); its next-steps list defers to [PLAN-BUGUN.md](PLAN-BUGUN.md). | **PARTLY VERIFIED** — board facts, switch map and X/Z jog directions were checked on the test rig; `SCALE` (calibrated under GRBL) is not yet verified on the TB6560, and its next steps are a plan |
-| — | [PLAN-BUGUN.md](PLAN-BUGUN.md) | **Test-rig completion plan.** Nine phases from the Y DIR fault to a repeatable program run and a persisted config, each with a gate; records the X home-switch error. In Turkish. | **DERIVED** (plan) |
+| — | [DURUM.md](DURUM.md) | **Session state — read this first.** Working environment, verified board facts, the hand-verified switch map, completed and next steps. In Turkish. Machine state as of 2026-11-12 (phases 1–8 on the test rig; raw data in [board-dumps/](board-dumps/) `rig-measurements-2026-11-12.json`); its next-steps list defers to [PLAN-BUGUN.md](PLAN-BUGUN.md). | **VERIFIED** on the test rig for what phases 1–8 measured — board facts, switch map, directions, `SCALE`, travel, homing, soft limits; its open work list is a plan |
+| — | [PLAN-BUGUN.md](PLAN-BUGUN.md) | **Test-rig completion plan.** Nine phases from the Y DIR fault to a repeatable program run and a persisted config, each with a gate; records the X home-switch error. In Turkish. | plan — gates 1–8 passed 2026-11-12 (gate 8 with an open item, the Z drift); gate 9 open |
 | — | [MERMER-GECIS.md](MERMER-GECIS.md) | **Marble-machine transition list.** Purchases, modules disabled on the test rig, config changes, input budget, safety rules. In Turkish. | **DERIVED** |
 | 00 | [00-upstream-reference-map.md](00-upstream-reference-map.md) | Reconnaissance of the read-only clones in `reference/`: LinuxCNC 2.9.10 and hostmot2-firmware. Where the 7i96 driver support lives, the exact HAL pin/parameter naming for stepgen/encoder/pwmgen, how `hm2_eth` discovers a board, pncconf's board list, and where the authoritative HAL/INI/hostmot2 docs are for offline grep. **Its claims about the LinuxCNC source are solid and cited; its 7i96 module counts describe Mesa's board, not ours.** | **DERIVED** |
 | 01 | [01-machine-survey.md](01-machine-survey.md) | Fill-in inventory checklist for the existing machine — motors, drives, switches, spindle/VFD, coolant, E-stop chain, and the old controller's settings. In Turkish. **Blank — this is a form to complete at the machine, and the settings on the old controller are unrecoverable once it is removed.** | **DERIVED** (empty) |
@@ -57,16 +60,16 @@ actually is, then [PLAN-BUGUN.md](PLAN-BUGUN.md) for what is left to do on the t
 | 03 | [03-7i96-pinout.md](03-7i96-pinout.md) | All 51 IO pins of the **stock Mesa 7i96** — **⚠ SUPERSEDED, WRONG BOARD FAMILY.** Our board is a 7i92. Kept because its analysis of *driver behaviour* is still correct and useful: how the board-name string becomes the HAL prefix, how `port_num = i / port_width` maps IO to connectors, the `ioport_connector_name[]` ordering bug, and the two `hm2_print_pin_usage()` forms you need to read a dump. The pin table itself does not apply. | ⚠️ **SUPERSEDED** by [10](10-7i92-pinout-verified.md) |
 | 04 | [04-zhulong-board-hardware.md](04-zhulong-board-hardware.md) | **Our board, from photographs.** Connector layout by edge, inventory with OBSERVED/INFERRED/UNVERIFIED tags, the 24 V input analysis from the 4.7 kΩ/510 Ω resistors. Its IO-numbering hypothesis is now **CONFIRMED**. Its I/O budget assumed 51 pins and is **wrong** — use [10](10-7i92-pinout-verified.md). Photograph observations stand. | **PARTLY SUPERSEDED** |
 | 05 | [05-pi-setup.md](05-pi-setup.md) | **The controller platform runbook.** PREEMPT_RT + `linuxcnc-uspace` (the only option for Mesa Ethernet cards), latency validation and why our jitter budget is ~40× looser than a parallel-port machine's, network configuration for `hm2_eth`, a pre-flight checklist, and capturing the stepgen `clock_frequency`. **Corrected 2026-08-23:** we run **amd64** on a laptop live USB, not arm64 on a Pi — the Pi 3 was ruled out because its Ethernet is behind USB. The arm64/Pi material is kept as the future-Pi path: **the final controller is a Raspberry Pi 4** (decided 2026-10-19). | **PARTLY VERIFIED** |
-| 06 | [06-grbl-to-linuxcnc.md](06-grbl-to-linuxcnc.md) | **GRBL → LinuxCNC settings translation**, for Phase 1.5. Every GRBL 1.1 setting `$0`–`$132` with its LinuxCNC equivalent, units and conversion; the five conversion traps (÷60 velocities, ×1000 step pulse, acceleration unchanged); what has no GRBL source and must be decided by hand; the conceptual gaps that are not settings (joints vs axes, shared limit/home switches, AVR vs FPGA step generation); and how to capture `$$` and `$I`. **LinuxCNC side verified and cited; GRBL side cannot be — `reference/` contains no GRBL material.** | **DERIVED**, partly exercised — the test-rig config built from it loads, enables and jogs ([DURUM.md](DURUM.md)) |
-| 07 | [07-test-machine-grbl-analysis.md](07-test-machine-grbl-analysis.md) | Analysis of the test router's GRBL EEPROM dump — the `SCALE` values we actually use (calibrated under GRBL with the old driver; not yet verified on the TB6560 — [PLAN-BUGUN.md](PLAN-BUGUN.md) phase 3), and which `$` settings were still untouched factory defaults (notably `$130`–`$132` travel). In Turkish. | **DERIVED** |
+| 06 | [06-grbl-to-linuxcnc.md](06-grbl-to-linuxcnc.md) | **GRBL → LinuxCNC settings translation**, for Phase 1.5. Every GRBL 1.1 setting `$0`–`$132` with its LinuxCNC equivalent, units and conversion; the five conversion traps (÷60 velocities, ×1000 step pulse, acceleration unchanged); what has no GRBL source and must be decided by hand; the conceptual gaps that are not settings (joints vs axes, shared limit/home switches, AVR vs FPGA step generation); and how to capture `$$` and `$I`. **LinuxCNC side verified and cited; GRBL side cannot be — `reference/` contains no GRBL material.** | **DERIVED**, partly exercised — the test-rig config built from it loads, enables, jogs and passed phases 1–8 on 2026-11-12 ([DURUM.md](DURUM.md)) |
+| 07 | [07-test-machine-grbl-analysis.md](07-test-machine-grbl-analysis.md) | Analysis of the test router's GRBL EEPROM dump — the `SCALE` values the config started from (833.3 / 823.5 / 1250; on 2026-11-12 phase 3 measured them ~8.3× / 10.2× too high for these mechanics, so they were never calibrated for them; the dump stays as history), and which `$` settings were still untouched factory defaults (notably `$130`–`$132` travel). In Turkish. | **DERIVED**; its `SCALE` conclusion disproved by measurement |
 | 08 | [08-zhulong-pinout-confirmed.md](08-zhulong-pinout-confirmed.md) | Board pinout from the vendor's own annotated diagram — connectors, terminals, silkscreen. In Turkish. **Corrected 2026-08-05**: the 7i96 comparison table was the wrong family and is now a 7i92 comparison. Its connector observations were right and cross-check cleanly against the dumps. | **VERIFIED** (connectors) |
-| 09 | [09-tb6560-drivers.md](09-tb6560-drivers.md) | TB6560 stepper driver analysis — where `steplen`/`stepspace`/`dirsetup`/`dirhold` come from, and the 15 kHz STEP-frequency ceiling that caps axis velocity. In Turkish. | **DERIVED** |
-| **10** | [**10-7i92-pinout-verified.md**](10-7i92-pinout-verified.md) | ⭐ **The real pin map.** All 34 IO pins from `mesaflash --readhmid` and `--print-pd`: IO number, port (P2 = 0–16, P1 = 17–33), secondary function, vendor terminal, HAL pin name. Plus IDROM summary, module inventory, the GPIO budget (28 of 34 available), and a full account of the 7i96→7i92 correction. **Wire from this document.** | ✅ **VERIFIED** |
-| **11** | [11-ui-implementation.md](11-ui-implementation.md) | **Operator UI implementation.** Stack choice (Python stdlib + server-side HTML) and why; the data-driven capability model that renders absent features disabled rather than hidden; the LinuxCNC data boundary; what is mocked vs real; and a table of all **24 prototype facts corrected** with citations. Code in [ui/](../ui/), 845 tests, 99.5% coverage (2026-11-04). | **DERIVED**, run against a real LinuxCNC 2.9.9 in [sim/](../sim/README.md), not yet on the machine |
+| 09 | [09-tb6560-drivers.md](09-tb6560-drivers.md) | TB6560 stepper driver analysis — where `steplen`/`stepspace`/`dirsetup`/`dirhold` come from; the 15 kHz STEP-frequency ceiling (with the measured `SCALE` it sits far above the configured speeds); and the rig's real wiring: common-cathode at 3.3 V, one driver per output (measured 2026-11-12). In Turkish. | **DERIVED**; wiring and levels measured, timing worked on the rig but never scoped |
+| **10** | [**10-7i92-pinout-verified.md**](10-7i92-pinout-verified.md) | ⭐ **The real pin map.** All 34 IO pins from `mesaflash --readhmid` and `--print-pd`: IO number, port (P2 = 0–16, P1 = 17–33), secondary function, vendor terminal, HAL pin name. Plus IDROM summary, module inventory, the GPIO budget (26 of 34 with `num_stepgens=4`), and a full account of the 7i96→7i92 correction. **Wire from this document.** | ✅ **VERIFIED** |
+| **11** | [11-ui-implementation.md](11-ui-implementation.md) | **Operator UI implementation.** Stack choice (Python stdlib + server-side HTML) and why; the data-driven capability model that renders absent features disabled rather than hidden; the LinuxCNC data boundary; what is mocked vs real; and a table of all **24 prototype facts corrected** with citations. Code in [ui/](../ui/), 927 tests (2026-11-13), 99.5% coverage (2026-11-04). | **DERIVED**, run against a real LinuxCNC 2.9.9 in [sim/](../sim/README.md); on the machine only view-only beside AXIS (2026-11-12, defects under its Known gaps) |
 | — | [../sim/README.md](../sim/README.md) | **The simulator.** Real LinuxCNC 2.9.9 in Docker on the Mac, arm64 like the Pi 4; the rig's own INI with the board, steps and switches simulated. The UI and the kiosk are tried there before the machine. In Turkish. | runs (2026-10-19) |
-| — | [../deploy/README.md](../deploy/README.md) | **Kiosk and remote access.** Power on → LinuxCNC → our UI, full screen, no way out to a desktop; the machine reached from the Mac over SSH (key only) instead of USB. In Turkish. | tried in [sim/](../sim/README.md); not yet installed on the machine |
-| — | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | **Blocker register** — B1–B7, three now closed (B2, B3, B4) and B5 downgraded to non-blocking, each with who answers it, what it blocks, and space for the dated answer. Answers are struck through, never deleted, so the decision history survives. In Turkish. Organised by *what it blocks*; [04](04-zhulong-board-hardware.md)'s Q-list covers overlapping ground organised by *how `readhmid` settles it*. | **DERIVED** |
-| — | [board-dumps/](board-dumps/) | **The evidence.** `readhmid` and `print-pd` from the board (2026-08-05), plus the test machine's GRBL EEPROM and gSender settings (2026-08-03). Never edited — these are the primary sources every VERIFIED claim cites. | ✅ **raw data** |
+| — | [../deploy/README.md](../deploy/README.md) | **Kiosk and remote access.** Power on → LinuxCNC → our UI, full screen, no way out to a desktop; the machine reached from the Mac over SSH (key only) instead of USB. In Turkish. | tried in [sim/](../sim/README.md); on the machine SSH is in use (2026-11-12), the kiosk is not yet installed |
+| — | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | **Blocker register** — B1–B12: B1–B7 for the board and the marble machine (three closed: B2, B3, B4; B5 downgraded to non-blocking), B8–B12 open test-rig work found on 2026-11-12, each with who answers it, what it blocks, and space for the dated answer. Answers are struck through, never deleted, so the decision history survives. In Turkish. Organised by *what it blocks*; [04](04-zhulong-board-hardware.md)'s Q-list covers overlapping ground organised by *how `readhmid` settles it*. | **DERIVED** |
+| — | [board-dumps/](board-dumps/) | **The evidence.** `readhmid` and `print-pd` from the board (2026-08-05), plus the test machine's GRBL EEPROM and gSender settings (2026-08-03) and the test rig's phase 1–8 measurements (`rig-measurements-2026-11-12.json`). Never edited — these are the primary sources every VERIFIED claim cites. | ✅ **raw data** |
 
 ### The blockers, in one line each
 
@@ -77,21 +80,27 @@ From [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) — 🔴 blocks the next phase, 🟡
 | 🟡 **B1** | How many motors on Y? | open — **downgraded**, no longer a design constraint | Opening the cabinet and counting |
 | ✅ **B2** | Can the encoder pins be used as GPIO? | **CLOSED — YES** on the FPGA side, 9 extra inputs (terminal front-end not yet checked with a meter) | `print-pd` (2026-08-05) |
 | ✅ **B3** | Are the AXIS blocks differential or single-ended? | **CLOSED** — single-ended, `GND STEP DIR 5V` | vendor diagram |
-| ✅ **B4** | Do the drives expect 5 V or 24 V signalling? | **CLOSED** for the test rig — TB6560 | driver markings |
+| ✅ **B4** | Do the drives expect 5 V or 24 V signalling? | **CLOSED** for the test rig — TB6560 optos, driven straight from the board's 3.3 V outputs (common-cathode), one driver per output (2026-11-12) | driver markings, meter |
 | 🔵 **B5** | Is the declared clock frequency real? | **downgraded** — 100 MHz, IDROM self-consistent, non-blocking | scope, eventually |
 | 🟡 **B6** | Do the isolated inputs take a 24 V sensor directly? | open | optocoupler P/N + meter |
 | 🔴 **B7** | Second, isolated 24 V supply | open | procurement decision |
+| 🟡 **B8** | Why does Z drift ~0.02 mm per program run, one way? | open (test rig) — suspect: 50 mm/s² Z acceleration against gravity | trying 25 mm/s² and repeating the phase 8 check |
+| 🟡 **B9** | Do Y's two gantry sides stay square? | open (test rig) — deferred in phase 4 | measuring both sides |
+| 🟡 **B10** | Why does the PC go black in a normal boot? | open (test rig) — usable only in GRUB failsafe, one CPU, since a power cut | boot / GPU investigation |
+| 🟡 **B11** | Is the USB Wi-Fi dongle good enough for SSH? | open (test rig) — drops often | a better dongle or wired LAN |
+| 🟡 **B12** | How does the UI run view-only beside AXIS? | open — `--observe` added in phase 9 (tested against `fake_linuxcnc` only); not yet run beside AXIS on the machine | one run beside AXIS on the machine |
 
 **The input-budget crisis is over** — on the FPGA side. B2 closed YES: `num_encoders=0` releases IO 25–33,
 so we have **14 inputs** rather than 5; the nine at the encoder terminals sit behind an
 unverified front-end, so check them with an ohmmeter before wiring any 24 V device to them. A dual-motor gantry Y needs 6 — it fits with room
-to spare, and StepGen 3 is available at IO 10/11 for the fourth motor without any firmware
-change. B1 still needs answering (it decides joint count and `trivkins coordinates=`), but
+to spare, and StepGen 3 at IO 10/11 drives a fourth motor without any firmware change — on
+the test rig it already drives Y's second motor (2026-11-12). B1 still needs answering (it decides joint count and `trivkins coordinates=`), but
 a wrong guess no longer forces a redesign — hence 🔴 → 🟡.
 
 **B7 is now the only red in the register.** It is a procurement question, not a discovery
-question. (The Y DIR fault is an active test-rig hardware fault, tracked in
-[DURUM.md](DURUM.md) and [PLAN-BUGUN.md](PLAN-BUGUN.md) phase 1, not here.)
+question. (The Y DIR fault, a test-rig hardware fault tracked in [DURUM.md](DURUM.md), was
+fixed on 2026-11-12: Y's two drivers shared one 3.3 V output, which cannot drive two
+optocouplers; the second driver now has AXIS 3.)
 
 ## Scripts
 
@@ -132,10 +141,10 @@ module complement; the vendor supplied their own bitfile (6 StepGen, 3 QCount, 1
 any stock Mesa bitfile — the pin assignments would not match the vendor's opto-isolators
 and analog converter.
 
-**3. 28 of the 34 IO pins are available as GPIO, which retired the input-budget crisis.**
+**3. 26 of the 34 IO pins are available as GPIO (28 before StepGen 3 went to Y's second motor on 2026-11-12), which retired the input-budget crisis.**
 IO 17–24 have **no secondary tag at all** in the pin descriptors — no module in this
 firmware *can* claim them, so they are permanently GPIO whatever the config says. On top of
-that, `num_encoders=0` releases IO 25–33, `num_stepgens=3` releases IO 10–15, and
+that, `num_encoders=0` releases IO 25–33, `num_stepgens=4` releases IO 12–15 (`num_stepgens=3` released IO 10–15), and
 `sserial_port_0=xxxxxxxx` releases IO 0–3. The marble machine's worst case (dual-motor
 gantry Y) needs 6 inputs; we have 14. See [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) B2.
 
@@ -165,19 +174,20 @@ platform runbook, GRBL translation tooling, the test router's GRBL analysis — 
 [configs/test-rig/](../configs/test-rig/) **runs**: `hm2_eth` loads cleanly, the machine
 enables, all three stepgens are active, **all three axes jog** (X+ = right, Z+ = up),
 0 packet errors in 10 s, and every switch's position and polarity were mapped by hand
-([DURUM.md](DURUM.md)).
+([DURUM.md](DURUM.md)). On **2026-11-12** the test rig passed phases 1–8: the Y DIR fault was
+two Y drivers on one output (the second now on AXIS 3), `SCALE` and travel are measured, the
+switch nets are live (X home + negative limit `gpio.021`, positive `gpio.020`; Y home + negative
+`gpio.023`, positive `gpio.022`; Z home + positive `gpio.024`), homing repeats within
+0.03 mm, soft limits refuse out-of-range MDI moves, and a 50 mm square ran four times without
+an error.
 
-**Not done:** the Y axis DIR fault — Y+ and Y− move the same way, so Y's direction and
-which Y switch is the + end are unknown; where the fault sits (board terminal, cable or
-driver) is not yet measured. The switch nets are still commented out in the HAL, and the
-commented plan puts X home on the wrong end: with X homing toward its minimum end
-(`HOME_SEARCH_VEL = -2.0`, still an ASSUMPTION in the INI), X home + negative limit must be
-`gpio.021` (left, minimum end), and `gpio.020` (right, maximum end) is the positive limit.
-Scale is not verified (`SCALE` came from GRBL; the TB6560 microstep setting may differ).
-Travel is not measured, so 150/150/50 mm is still an ASSUMPTION. Homing has never been
-attempted and no program has been run. No hardware e-stop is wired on the test rig — keep
-a hand on the power switch. All of this is tracked phase by phase in
-[PLAN-BUGUN.md](PLAN-BUGUN.md).
+**Not done:** phase 9 (persist the config and check it survives a reboot) and the open work
+list in [DURUM.md](DURUM.md): a one-way Z drift of ~0.02 mm per program run (suspect: Z
+acceleration), the X motor cable's durability, the Y gantry squareness check, the PC booting
+usably only in GRUB failsafe since a power cut, a flaky USB Wi-Fi dongle, trying the UI's new
+observer mode (`--observe`) beside AXIS on the machine, the minor layout issues, BIOS/latency
+tuning, the `gpio.000`/`001` `pin_new` warning, and the kiosk install (OPEN-QUESTIONS B8–B12).
+No hardware e-stop is wired on the test rig — keep a hand on the power switch.
 
 ### Phase 1.5 — prove the chain on the small router first
 
@@ -220,43 +230,44 @@ resolved for X — `gpio.020` right = maximum end, `gpio.021` left = minimum end
 DIR fix)
 
 Remaining — *list replaced 2026-10-18 with the [PLAN-BUGUN.md](PLAN-BUGUN.md) phase order,
-which the to-do list in [configs/test-rig/README.md](../configs/test-rig/README.md) now mirrors.*
+which the to-do list in [configs/test-rig/README.md](../configs/test-rig/README.md) now mirrors.
+Phases 1–8 passed on 2026-11-12 (results in [DURUM.md](DURUM.md)); phase 9 is next.*
 Every phase has a gate there; do not start the next phase before the gate passes. The test
 rig must pass all nine gates before the marble machine (decision 2026-10-18).
 
-1. **Y DIR fault** → Y does not change direction (Y+ and Y− move the same way). Compare
+1. ✅ *(2026-11-12: two Y drivers shared AXIS 1; the second moved to AXIS 3)* **Y DIR fault** → Y does not change direction (Y+ and Y− move the same way). Compare
    the AXIS 1 wiring with X, then meter AXIS 1 `DIR` ↔ `GND` while jogging Y+/Y− to find
    where it breaks — board terminal, cable or driver. Both jogs drive Y toward the front
    and no limit is wired: start with Y near the rear, keep each jog short, and keep a hand
    on the power switch. Gate: Y+ and Y− move in opposite directions.
-2. **Direction map** → record which way Y+ goes, and so which Y switch is at its + end.
+2. ✅ *(Y+ = rear)* **Direction map** → record which way Y+ goes, and so which Y switch is at its + end.
    X+ = right and Z+ = up are already known. If an axis's + direction must be reversed,
    negate its `SCALE` here (not by rewiring) and redo this map — negating it later swaps
    which switch is the + end and the sign of every measured position.
-3. **Scale check** → jog a measured distance on each axis. `SCALE` came from the GRBL
-   EEPROM, calibrated under the old driver; the TB6560 microstep setting may differ. Gate:
+3. ✅ *(X 100.085, Y 98.592, Z 122.274 steps/mm, within 1 %)* **Scale check** → jog a measured distance on each axis. `SCALE` came from the GRBL
+   EEPROM — never calibrated for these mechanics, it turned out (~8.3× / 10.2× too high). Gate:
    commanded and measured distance agree within 1 % on all three axes.
-4. **Measure travel** → resolves **A5**. Very slowly, hand on the power switch. No switch
+4. ✅ *(soft limits X 3..399, Y 3..387, Z −96.5..−3)* **Measure travel** → resolves **A5**. Very slowly, hand on the power switch. No switch
    is wired, and the soft limits do not protect an unhomed axis (LinuxCNC only bounds the
    jog to ±(full range) around the current position, `command.c:154-175`), so you stop it:
    jog X and Y until they touch each switch, Z down from the top switch
    only until close to the mechanical stop (there is no bottom switch). Replace the assumed
    150/150/50 mm in the INI, leaving 2–3 mm margin.
-5. **Uncomment the switch nets** in `test-rig.hal` with `.in_not`, but **not** in their
+5. ✅ *(`test-rig.hal:301-327`; a pressed switch trips `joint N on limit switch error`)* **Uncomment the switch nets** in `test-rig.hal` with `.in_not`, but **not** in their
    commented form. With X homing toward its minimum end (an INI assumption), X home +
    negative limit is `gpio.021` (left, minimum end), and `gpio.020` (right, maximum end) is
    X's positive limit. The Y nets follow phase 2. Test first with no motion: each switch reads
    TRUE when pressed. Then, slowly and with a hand on the power switch, check that a pressed
    limit blocks a jog in its direction.
-6. **Home**. The motors are already coupled to the mechanics ([PLAN-BUGUN.md](PLAN-BUGUN.md), last section). Read
+6. ✅ *(repeatable to 0.03 mm or better)* **Home**. The motors are already coupled to the mechanics ([PLAN-BUGUN.md](PLAN-BUGUN.md), last section). Read
    `ini-homing.adoc:46` first: home and limit share a switch, so `HOME_IGNORE_LIMITS = YES`
    and nothing stops an axis that misses its switch. One joint at a time at reduced
    speed, Z → Y → X. Gate: two homings in a row give the same DRO.
-7. **Prove the soft limits** → an MDI move past each limit is refused and the axis does
+7. ✅ **Prove the soft limits** → an MDI move past each limit is refused and the axis does
    not move.
-8. **Run a program**: an air dry-run (no cutting) three times, with a repeatable DRO and no
+8. ✅ *(with an open item: a one-way Z drift of ~0.02 mm per run)* **Run a program**: an air dry-run (no cutting) three times, with a repeatable DRO and no
    packet errors.
-9. **Persist** → measured values into the INI, update [DURUM.md](DURUM.md), commit, and
+9. **Persist** → measured values into the INI, update [DURUM.md](DURUM.md), commit (only when the user asks), and
    check after a reboot that the live-USB persistence kept the config.
 
 Phase 1.5 is complete only when all nine gates pass. Then:
@@ -296,8 +307,9 @@ When a document's claims get confirmed against hardware, change its status to
 has been applied: [03](03-7i96-pinout.md) superseded, [04](04-zhulong-board-hardware.md)
 partly superseded, [08](08-zhulong-pinout-confirmed.md) corrected,
 [10](10-7i92-pinout-verified.md) added, B2 closed and B5 downgraded (B3 and B4 had already
-closed on 2026-08-03, from the vendor diagram and the driver markings). The next status
-changes come from the [PLAN-BUGUN.md](PLAN-BUGUN.md) gates (scale, travel, homing).
+closed on 2026-08-03, from the vendor diagram and the driver markings). Since then the
+status changes came from the [PLAN-BUGUN.md](PLAN-BUGUN.md) gates: 1–8 (scale, travel, homing and the
+rest) on 2026-11-12; gate 9 (persistence) is next.
 
 ## Setting up on a new computer
 

@@ -52,7 +52,7 @@ import unittest
 import urllib.request
 from html.parser import HTMLParser
 
-from helpers import ALL_SCREENS, REPO_ROOT, UI_DIR, view
+from helpers import ALL_SCREENS, REPO_ROOT, UI_DIR, provisional_travel, view
 
 from bettercnc import app
 from bettercnc.capabilities import Capability
@@ -608,7 +608,7 @@ class TestMainHandsOffToServe(unittest.TestCase):
             recorder.calls,
             [{"profile": "test-rig", "host": "127.0.0.1", "port": 8080, "adapter_kind": "mock",
               "boot_url": None, "exit_if_lost_s": None, "exit_reason_file": None,
-              "ini_path": None, "startup_note_file": None}],
+              "ini_path": None, "startup_note_file": None, "observe": False}],
         )
 
     def test_flags_reach_serve_and_the_port_is_an_int(self):
@@ -618,7 +618,7 @@ class TestMainHandsOffToServe(unittest.TestCase):
             ["--profile", "marble", "--host", "0.0.0.0", "--port", "9090", "--adapter", "linuxcnc",
              "--boot-url", "http://127.0.0.1:8079/", "--exit-if-linuxcnc-lost", "3",
              "--exit-reason-file", "/tmp/r.txt", "--ini", "/tmp/m.ini",
-             "--startup-note-file", "/tmp/n.txt"]
+             "--startup-note-file", "/tmp/n.txt", "--observe"]
         )
         self.assertEqual(run.code, 0)
         self.assertEqual(
@@ -626,7 +626,7 @@ class TestMainHandsOffToServe(unittest.TestCase):
             [{"profile": "marble", "host": "0.0.0.0", "port": 9090, "adapter_kind": "linuxcnc",
               "boot_url": "http://127.0.0.1:8079/", "exit_if_lost_s": 3.0,
               "exit_reason_file": "/tmp/r.txt", "ini_path": "/tmp/m.ini",
-              "startup_note_file": "/tmp/n.txt"}],
+              "startup_note_file": "/tmp/n.txt", "observe": True}],
         )
         self.assertIsInstance(recorder.calls[0]["port"], int)
 
@@ -664,17 +664,19 @@ class TestMainHandsOffToServe(unittest.TestCase):
         self.assertEqual(session.profile.ini_path, copy)
         self.assertEqual(app.build_session("test-rig", "mock").profile.ini_path, src)
         # The profile is BUILT from the INI, not merely pointed at it (review
-        # 2026-10-21): a copy with the travel measured must say so everywhere.
+        # 2026-10-21): the copy's travel is measured (Faz 4, 2026-11-12), and
+        # the same copy with it marked ASSUMPTION again must say so everywhere.
+        self.assertTrue(session.profile.travel_measured)
+        self.assertTrue(session.config.soft_limits_configured)
+        self.assertIn(copy, session.profile.capability(Capability.SOFT_LIMITS).source)
         with open(copy, encoding="utf-8") as fh:
             text = fh.read()
         with open(copy, "w", encoding="utf-8") as fh:
-            fh.write(text.replace("ASSUMPTION:", "VERIFIED:").replace("MUST BE MEASURED", "MEASURED")
-                     .replace("PROVISIONAL", "SETTLED"))   # iniload.PROVISIONAL_MARKERS, all three
-        measured = app.build_session("test-rig", "mock", copy)
-        self.assertFalse(session.profile.travel_measured)
-        self.assertTrue(measured.profile.travel_measured)
-        self.assertTrue(measured.config.soft_limits_configured)
-        self.assertIn(copy, measured.profile.capability(Capability.SOFT_LIMITS).source)
+            fh.write(provisional_travel(text))
+        unmeasured = app.build_session("test-rig", "mock", copy)
+        self.assertFalse(unmeasured.profile.travel_measured)
+        self.assertFalse(unmeasured.config.soft_limits_configured)
+        self.assertIn(copy, unmeasured.profile.capability(Capability.SOFT_LIMITS).source)
         with self.assertRaises(ValueError):
             app.build_session("marble", "mock", copy)   # no INI to replace
 
@@ -946,8 +948,8 @@ class TestSupervise(unittest.TestCase):
         app.ThreadingHTTPServer = Stub
         original = app.build_session
 
-        def build(profile, kind, ini_path=None):
-            session = original(profile, kind, ini_path)
+        def build(profile, kind, ini_path=None, observe=False):
+            session = original(profile, kind, ini_path, observe)
             session.adapter = _Lost(["gone"] * 1000)
             return session
 
