@@ -100,6 +100,24 @@ class TestMdiTextEntry(unittest.TestCase):
         self.assertFalse(entry["accepted"])
         self.assertTrue(entry["note"].strip())
 
+    def test_history_carries_each_lines_status(self):
+        """Plan WP04: the mock runs nothing, so a line it accepts is done at
+        once and green; a refused one is refused and red (LinuxCncAdapter
+        adds "sent" and "rejected", test_messages)."""
+        _, _, adapter = session("test-rig")
+        adapter.send_mdi("G0 X10")                 # machine off: refused
+        adapter.software_estop_reset()
+        adapter.home_all()
+        adapter.send_mdi("G0 X10")
+        hist = view("test-rig", "kontrol", adapter=adapter)["kontrol"]["mdi"]["history"]
+        self.assertEqual([(h["accepted"], h["status"]) for h in hist],
+                         [(True, "done"), (False, "refused")])
+        markup = html("test-rig", "kontrol", adapter=adapter)
+        self.assertIn('data-status="done"><code>G0 X10</code><span class="mdi-note" '
+                      'style="color:#84d9a5">', markup)
+        self.assertIn('data-status="refused"><code>G0 X10</code><span class="mdi-note" '
+                      'style="color:#d9848c">', markup)
+
     def test_history_reaches_the_markup(self):
         _, _, adapter = session("test-rig")
         adapter.software_estop_reset()
@@ -456,10 +474,18 @@ class TestLinuxCncMapping(unittest.TestCase):
         self.assertFalse(st.link.connected)
 
     def test_paused_program_is_not_running(self):
-        """interp_state is PAUSED (3) while paused, not IDLE (1)."""
-        st = self._map(self._stat(file="a.ngc", paused=1, interp_state=3))
-        self.assertFalse(st.program_running)
-        self.assertTrue(self._map(self._stat(file="a.ngc", paused=0, interp_state=3)).program_running)
+        """interp_state is PAUSED (3) while paused, not IDLE (1). Plan WP09:
+        the interpreter PAUSED is a pause whatever motion's flag says (until
+        then it read as running), and running needs AUTO (2)."""
+        for paused in (1, 0):
+            with self.subTest(paused=paused):
+                st = self._map(self._stat(file="a.ngc", task_mode=2, paused=paused,
+                                          interp_state=3))
+                self.assertFalse(st.program_running)
+                self.assertTrue(st.program_paused)
+        st = self._map(self._stat(file="a.ngc", task_mode=2, paused=0, interp_state=2))
+        self.assertTrue(st.program_running)
+        self.assertFalse(st.program_paused)
 
     def test_estop_reset_state_means_software_disabled(self):
         """Out of estop but not ON is not ON (emctask.cc:419-430)."""
@@ -557,7 +583,8 @@ class TestAdapterInterface(unittest.TestCase):
         _, _, adapter = session("test-rig")
         for name in (
             "snapshot", "send_mdi", "software_estop", "software_estop_reset",
-            "home_all", "jog", "program_start", "program_stop",
+            "home_all", "jog", "program_start", "stop_motion", "stop_followup",
+            "recover_limit",
         ):
             with self.subTest(method=name):
                 self.assertTrue(callable(getattr(adapter, name)))
@@ -866,6 +893,189 @@ class TestMockLock(unittest.TestCase):
         for name in public:
             with self.subTest(method=name):
                 self.assertTrue(hasattr(getattr(MockAdapter, name), "__wrapped__"))
+
+
+class TestMockFeedAndWcsFollowTheRealRule(unittest.TestCase):
+    """P0 cleanup item 12: MockAdapter took a negative feed, one above the
+    INI ceiling, any feed with no INI and any WCS string, with no MDI gate.
+    Both adapters now apply adapter.feed_override_decision and
+    adapter.wcs_refusal, and the WCS goes through mdi_refusal."""
+
+    def ready(self, key="test-rig", homed=True):
+        from bettercnc.adapter import MockAdapter
+        m = MockAdapter(load_profile(key))
+        m.software_estop_reset()
+        if homed:
+            m.home_all()
+        return m
+
+    def test_feed(self):
+        m = self.ready()
+        m.set_feed_override(50)
+        self.assertEqual(m.snapshot().feed_override_pct, 50)
+        m.set_feed_override(-10)
+        snap = m.snapshot()
+        self.assertEqual((snap.feed_override_pct, snap.message_severity), (50, Severity.WARN))
+        self.assertEqual(snap.message, "Geçersiz besleme yüzdesi: %-10.")
+        m.set_feed_override(150)            # the rig's ceiling is 100 %
+        snap = m.snapshot()
+        self.assertEqual(snap.feed_override_pct, 100)
+        self.assertEqual(snap.message, "Besleme %150 istendi; INI sınırı %100 uygulandı.")
+        marble = self.ready("marble", homed=False)
+        marble.set_feed_override(50)
+        snap = marble.snapshot()
+        self.assertEqual(snap.feed_override_pct, 100)
+        self.assertIn("INI yok", snap.message)
+
+    def test_wcs(self):
+        m = self.ready()
+        m.set_wcs("G99")
+        snap = m.snapshot()
+        self.assertEqual((snap.wcs, snap.message), ("G54", "Bilinmeyen koordinat sistemi: G99"))
+        m.set_wcs("G55")
+        self.assertEqual(m.snapshot().wcs, "G55")
+        unhomed = self.ready(homed=False)
+        unhomed.set_wcs("G56")
+        snap = unhomed.snapshot()
+        self.assertEqual(snap.wcs, "G54")
+        self.assertIn("Referans alınmadı", snap.mdi_history[-1].note)
+
+    def test_one_rule(self):
+        import inspect
+        from bettercnc import adapter as A
+        for cls in (A.MockAdapter, A.LinuxCncAdapter):
+            with self.subTest(adapter=cls.__name__):
+                self.assertIn("feed_override_decision(", inspect.getsource(cls.set_feed_override))
+                self.assertIn("wcs_refusal(", inspect.getsource(cls.set_wcs))
+        self.assertEqual(A.feed_override_decision(0, 100).pct, 0)      # a hold is valid
+        self.assertIsNone(A.feed_override_decision(10, None).pct)
+
+
+class TestMdiGateGaps(unittest.TestCase):
+    """P0 cleanup item 11 (docs/11 'MDI gate gaps'): the motion parse now
+    sees a value written as a unary function, M98, M6 when the INI makes a
+    tool change move, and remapped codes; and no MDI line goes while a
+    joint homes. Always in the safe direction: more refused, never less."""
+
+    MOVES = M.MdiContext(tool_change_moves=True)
+    REMAP = M.MdiContext(remapped=frozenset({"M6", "M400", "G88.1", "T"}))
+
+    def test_unary_functions(self):
+        for line in ("XSIN[30]", "X-SIN[30]", "ZABS[-2]", "YATAN[1]/[2]", "XEXISTS[#<a>]",
+                     "XFIX[1.5]", "GFUP[27.5]", "G0 X[SQRT[4]]", "ACOS[0.5]", "ASIN[30]",
+                     "G0 XACOS[1]"):
+            with self.subTest(line=line):
+                self.assertTrue(_needs_homing(line))
+        self.assertFalse(_needs_homing("G4 PSIN[1]"))     # a dwell, P a time
+
+    def test_m98_and_a_tool_change_that_moves(self):
+        self.assertTrue(_needs_homing("M98 P100"))
+        self.assertFalse(_needs_homing("T1 M6"))
+        self.assertTrue(_needs_homing("T1 M6", self.MOVES))
+        self.assertTrue(_needs_homing("M06 T2", self.MOVES))
+        self.assertFalse(_needs_homing("M61 Q1", self.MOVES))
+        self.assertTrue(_needs_homing("M#1"))             # which M code is not known
+        self.assertTrue(_needs_homing("X#1", self.MOVES))  # a parameter as a value
+        self.assertTrue(_needs_homing("I#1", self.MOVES))
+        self.assertFalse(_needs_homing("S#1", self.MOVES))
+
+    def test_an_m_code_written_as_an_expression(self):
+        """Review of the P0 cleanup: read_m takes an expression
+        (read_integer_value, interp_read.cc:1119, :783-797), so "M[98]" is
+        M98 and "M[6]" M6 - which code cannot be known here, as for M#1."""
+        for line in ("M[98] P100", "M[6]", "M[2*3]", "MFIX[98.2]", "M-[6]"):
+            with self.subTest(line=line):
+                self.assertTrue(_needs_homing(line))
+        self.assertFalse(_needs_homing("M3 S[1000]"))     # S's expression is data
+
+    def test_remapped_codes(self):
+        for line in ("M6", "M400", "G88.1 Z-1", "T3"):
+            with self.subTest(line=line):
+                self.assertTrue(_needs_homing(line, self.REMAP))
+        self.assertFalse(_needs_homing("M3 S1000", self.REMAP))
+        self.assertFalse(_needs_homing("G21", self.REMAP))
+        self.assertFalse(_needs_homing("M61 Q1", self.REMAP))
+
+    def test_the_context_from_the_ini(self):
+        from bettercnc.iniload import parse_ini_text
+        self.assertEqual(M.mdi_context_from_ini(None), M.MdiContext())
+        ini = parse_ini_text(
+            "[EMCIO]\nTOOL_CHANGE_QUILL_UP = 1\n"
+            "[RS274NGC]\nREMAP=M06 modalgroup=6 ngc=change\nREMAP=G88.1 modalgroup=1 ngc=g881\n"
+            "REMAP=T prolog=prepare_prolog ngc=prepare\n")
+        ctx = M.mdi_context_from_ini(ini)
+        self.assertTrue(ctx.tool_change_moves)
+        self.assertEqual(ctx.remapped, frozenset({"M6", "G88.1", "T"}))
+        self.assertEqual(ini.get("RS274NGC", "REMAP").raw.split()[0], "M06")   # first only
+        for text, moves in (("[EMCIO]\nTOOL_CHANGE_AT_G30 = 0\n", False),
+                            ("[EMCIO]\nTOOL_CHANGE_AT_G30 = 1\n", True),
+                            ("[EMCIO]\nTOOL_CHANGE_POSITION = 0 0 -2\n", True),
+                            ("[EMCIO]\nTOOL_CHANGE_QUILL_UP = evet\n", True)):
+            with self.subTest(ini=text):
+                self.assertIs(M.mdi_context_from_ini(parse_ini_text(text)).tool_change_moves,
+                              moves)
+        from bettercnc.iniload import load_ini
+        rig = M.mdi_context_from_ini(load_ini(load_profile("test-rig").ini_path))
+        self.assertEqual(rig, M.MdiContext())              # the rig: neither
+
+    def test_refused_while_homing_on_both_adapters(self):
+        self.assertEqual(
+            mdi_refusal("G21", machine_on=True, homed=True, no_force_homing=True,
+                        program_running=False, homing=True), M.MDI_WHILE_HOMING)
+        import fake_linuxcnc as F
+        import test_linuxcnc_adapter as T
+        case = T.FakeCase("run")
+        case.setUp()
+        try:
+            adapter = case.make(machine=F.FakeMachine(home_instantly=False, no_force_homing=True))
+            adapter._no_force_homing = True
+            case.machine.power_on()
+            case.machine.issue_home(-1)
+            del case.machine.log[:]
+            entry = adapter.send_mdi("G21")
+            self.assertEqual((entry.accepted, entry.note), (False, M.MDI_WHILE_HOMING))
+            self.assertNotIn("mode", case.machine.calls())
+            # In the gap between two groups no joint reads homing: looked at
+            # again HOMING_GAP_RECHECK_S later, when Y has started.
+            case.machine.advance_homing()            # Z homed: the gap
+            adapter._sleep = lambda seconds: case.machine.advance_homing()
+            del case.machine.log[:]
+            entry = adapter.send_mdi("G21")
+            self.assertEqual((entry.accepted, entry.note), (False, M.MDI_WHILE_HOMING))
+            self.assertNotIn("mode", case.machine.calls())
+        finally:
+            case.doCleanups()
+        mock = MockAdapter(load_profile("test-rig"))
+        mock._homing = mock._homing.with_phase("Z", HomingPhase.HOMING)
+        mock._no_force_homing = True
+        mock.software_estop_reset()
+        self.assertEqual(mock.send_mdi("G21").note, M.MDI_WHILE_HOMING)
+
+    def test_the_facts_against_the_source(self):
+        import os
+        from helpers import REPO_ROOT
+        src = os.path.join(REPO_ROOT, "reference", "linuxcnc", "src")
+        if not os.path.isdir(src):
+            self.skipTest("reference/linuxcnc not cloned")
+        with open(os.path.join(src, "emc/rs274ngc/interp_read.cc"), encoding="utf-8",
+                  errors="replace") as fh:
+            read = fh.read()
+        unary = read[read.index("int Interp::read_operation_unary("):]
+        unary = unary[:unary.index("\n}\n")]
+        names = set(re.findall(r"\*operation = ([A-Z]+);", unary))
+        self.assertEqual(names, {"ABS", "ACOS", "ASIN", "ATAN", "COS", "EXP", "EXISTS", "FIX",
+                                 "FUP", "LN", "ROUND", "SIN", "SQRT", "TAN"})
+        self.assertEqual(set(M._UNARY_NAMES), names)
+        with open(os.path.join(src, "emc/task/emctask.cc"), encoding="utf-8") as fh:
+            task = fh.read()
+        self.assertRegex(task, r"case EMC_TASK_MODE_MDI:\s*// go to mdi mode\s*"
+                               r"emcTrajSetMode\(EMC_TRAJ_MODE_COORD\);\s*emcTaskAbort\(\);")
+        with open(os.path.join(src, "emc/rs274ngc/rs274ngc_pre.cc"), encoding="utf-8") as fh:
+            pre = fh.read()
+        self.assertIn('inifile.Find(&_setup.tool_change_at_g30, "TOOL_CHANGE_AT_G30", "EMCIO");', pre)
+        self.assertIn('inifile.Find(&_setup.tool_change_quill_up, "TOOL_CHANGE_QUILL_UP", "EMCIO");',
+                      pre)
+        self.assertIn('inifile.Find("REMAP", "RS274NGC",', pre)
 
 
 if __name__ == "__main__":

@@ -300,8 +300,14 @@ class TestClickRouting(unittest.TestCase):
         self.assertEqual(
             values,
             {"POLL_EVERY_MS": "1000", "POLL_TIMEOUT_MS": "2500", "ACTION_TIMEOUT_MS": "4000",
-             "LOST_MS": "3000", "BOOT_MS": "10000"},
+             "LOST_MS": "3000", "BOOT_MS": "10000",
+             # the stop rail and the held press (plan WP03)
+             "INSTANT_GUARD_MS": "500", "SWAP_AFTER_UP_MS": "50", "SWAP_HOLD_MAX_MS": "3000",
+             # «Evet» on the confirmation band turns on on time (P0 cleanup)
+             "READY_MARGIN_MS": "30"},
         )
+        # A press holds a re-render no longer than a silent screen stays uncovered.
+        self.assertEqual(values["SWAP_HOLD_MAX_MS"], values["LOST_MS"])
         with open(os.path.join(REPO_ROOT, "deploy", "README.md"), encoding="utf-8") as fh:
             readme = fh.read()
         for name, ms in values.items():

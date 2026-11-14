@@ -12,11 +12,13 @@ facts. Those tests run on test-rig.ini with the markers put back
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 
 from helpers import (
     ALL_SCREENS,
+    TEST_RIG_INI,
     all_html,
     html,
     ini_raw_values,
@@ -110,6 +112,8 @@ class TestReadyGateHasNoStaleWarnings(unittest.TestCase):
         _, _, adapter = session("test-rig")
         adapter.software_estop_reset()
         adapter.home_all()
+        # A program loaded too (plan WP08: with none, the gate says so).
+        adapter.load_program("/x/faz8-kare.ngc")
         gate = view("test-rig", "kontrol", adapter)["kontrol"]["gate"]
         self.assertEqual(gate["blocks"], [])  # premise: the startable state
         self.assertIn("Program başlatılabilir.", html("test-rig", "kontrol", adapter))
@@ -359,19 +363,26 @@ class TestOtherAbsentData(unittest.TestCase):
     """Things the prototype invented that have no source at all."""
 
     def test_no_program_files_are_invented(self):
+        """Plan WP08: the list is the INI's PROGRAM_PREFIX directory, read -
+        exactly its G-code files, nothing more (read here with os.listdir
+        and the INI parsed without project code)."""
+        prefix = ini_raw_values()["DISPLAY.PROGRAM_PREFIX"]
+        directory = os.path.normpath(os.path.join(os.path.dirname(TEST_RIG_INI), prefix))
+        on_disk = sorted(n for n in os.listdir(directory)
+                         if n.lower().endswith((".ngc", ".nc", ".tap")) and not n.startswith("."))
         vm = view("test-rig", "program")
-        self.assertEqual(vm["program"]["files"], [])
-        self.assertTrue(vm["program"]["files_empty_reason"].strip())
+        self.assertEqual(sorted(f["name"] for f in vm["program"]["files"]), on_disk)
+        self.assertIn("faz8-kare.ngc", on_disk)  # premise: Faz 8's program is there
+        self.assertEqual(vm["program"]["dir"], directory)
 
     def test_empty_reason_stays_true_with_programs_in_the_repo(self):
-        """The reason says why the list is empty (the program directory is not
-        read) and names the INI's PROGRAM_PREFIX. It may not call the repo
-        empty: nc_files/faz8-kare.ngc sits in that directory since Faz 8."""
-        reason = view("test-rig", "program")["program"]["files_empty_reason"]
-        self.assertIn("okunmuyor", reason)
-        self.assertNotIn(".ngc dosyası yok", reason)
-        prefix = ini_raw_values()["DISPLAY.PROGRAM_PREFIX"]
-        self.assertIn("PROGRAM_PREFIX = {} (test-rig.ini)".format(prefix), reason)
+        """With files listed there is no empty reason: the old "not read"
+        text would now be false, and "Dizin boş" too."""
+        program = view("test-rig", "program")["program"]
+        self.assertTrue(program["files"])
+        self.assertEqual(program["files_empty_reason"], "")
+        self.assertNotIn("okunmuyor", html("test-rig", "program"))
+        self.assertNotIn("Dizin boş", html("test-rig", "program"))
 
     def test_prototype_filenames_absent(self):
         markup = all_html("test-rig")

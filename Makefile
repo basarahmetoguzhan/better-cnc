@@ -15,10 +15,10 @@ PYTHON ?= python3
 export PYTHONPATH := ui:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
-.PHONY: help test test-ui test-scripts coverage reference ui ui-marble dump lint clean sim-build sim sim-stop sim-test sim-kiosk sim-lint
+.PHONY: help test test-ui test-scripts coverage reference ui ui-marble dump lint clean sim-build sim sim-stop sim-test sim-e2e sim-kiosk sim-lint
 
 help:  ## show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[1m%-16s\033[0m %s\n", $$1, $$2}'
 
 test:  ## run EVERY test in the repo (ui/tests + scripts/test_grbl2ini.py)
@@ -39,7 +39,7 @@ coverage:  ## line coverage for ui/bettercnc (stdlib tracer, no `coverage` pkg)
 coverage-missing:  ## coverage plus the uncovered line numbers
 	$(PYTHON) ui/tools/covreport.py --missing
 
-reference:  ## fetch reference/ (LinuxCNC + hostmot2 sources) at the pinned commits; 21 tests need it
+reference:  ## fetch reference/ (LinuxCNC + hostmot2 sources) at the pinned commits; 68 tests need it
 	scripts/fetch-reference.sh
 
 ui:  ## serve the operator UI for the test rig on :8080 (mock, not connected)
@@ -66,6 +66,11 @@ sim-stop:  ## stop the simulator
 
 sim-test:  ## the whole test suite inside the simulator image (arm64, Python 3.13)
 	sim/sim.sh test
+
+# A fresh LinuxCNC per module, as container better-cnc-e2e on :8771 (not the
+# developer's sim). E2E=test_baseline.py runs only that module.
+sim-e2e:  ## end-to-end: the UI driven over HTTP against the simulator (sim/e2e, E2E=module)
+	sim/e2e/run.sh $(E2E)
 
 sim-kiosk:  ## deploy/'s kiosk in the simulator, headless; then: sim/sim.sh shot x.png
 	sim/sim.sh kiosk

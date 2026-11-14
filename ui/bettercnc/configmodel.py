@@ -10,7 +10,8 @@ was not measured.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional
+import os
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple
 
 from .iniload import IniFile, load_ini
 
@@ -136,6 +137,12 @@ class MachineConfig(NamedTuple):
     #: The feed override ceiling in whole percent (max_feed_override_pct);
     #: None without an INI.
     max_feed_override_pct: Optional[int] = None
+    #: The program directory, [DISPLAY]PROGRAM_PREFIX resolved as LinuxCNC
+    #: resolves it (program_dir); None without an INI or without the key,
+    #: `program_dir_reason` then says which. Whether the directory exists
+    #: is programs.list_programs's question, asked at every render.
+    program_dir: Optional[str] = None
+    program_dir_reason: str = ""
 
     def axis(self, name: str) -> Optional[AxisConfig]:
         for a in self.axes:
@@ -179,6 +186,30 @@ def max_feed_override_pct(ini: IniFile) -> int:
     return int((1.0 if ceiling is None else ceiling) * 100 + 0.5)
 
 
+def program_dir(ini: IniFile, ini_path: str) -> Tuple[Optional[str], str]:
+    """[DISPLAY]PROGRAM_PREFIX as an absolute, normalised path, and "" - or
+    None and the reason there is none.
+
+    LinuxCNC reads it relative to the INI's directory: the linuxcnc script
+    changes there before starting anything (reference/linuxcnc/scripts/
+    linuxcnc.in:777), AXIS hands the raw value to its file dialog
+    (src/emc/usr_intf/axis/scripts/axis.py:3347) and the interpreter
+    expands a leading ~ and takes realpath() of it (src/emc/rs274ngc/
+    rs274ngc_pre.cc:946-957). Joined to the directory of the INI this UI
+    was given, the result is the same directory - the kiosk passes
+    LinuxCNC's own INI (deploy/bettercnc-display), and its kiosk INI sits
+    next to the source (deploy/make_kiosk_ini.py), so a relative prefix
+    resolves there too. normpath, not realpath: the path handed to
+    LinuxCNC is spelled as the INI spells it (programs.resolve checks
+    realpath containment itself)."""
+    value = ini.get("DISPLAY", "PROGRAM_PREFIX")
+    if value is None or not value.raw.strip():
+        return None, "INI'de [DISPLAY]PROGRAM_PREFIX yok — program dizini bilinmiyor."
+    prefix = os.path.expanduser(value.raw.strip())
+    base = os.path.dirname(os.path.abspath(ini_path))
+    return os.path.normpath(os.path.join(base, prefix)), ""
+
+
 def load_machine_config(profile: MachineProfile) -> MachineConfig:
     """Read the profile's INI. Returns an explicitly-absent config if there is none."""
     return load_config_from_ini(profile.ini_path)
@@ -207,6 +238,7 @@ def load_config_from_ini(ini_path: Optional[str]) -> MachineConfig:
                 "Bu makine için config yazılmadı. Envanter dolmadan yazılamaz "
                 "(docs/01-machine-survey.md)."
             ),
+            program_dir_reason="Bu makine için INI yok — program dizini bilinmiyor.",
         )
 
     ini = load_ini(ini_path)
@@ -274,6 +306,7 @@ def load_config_from_ini(ini_path: Optional[str]) -> MachineConfig:
 
     servo = ini.get("EMCMOT", "SERVO_PERIOD")
     board = ini.get("HOSTMOT2", "BOARD")
+    programs, programs_reason = program_dir(ini, ini_path)
 
     return MachineConfig(
         present=True,
@@ -292,6 +325,8 @@ def load_config_from_ini(ini_path: Optional[str]) -> MachineConfig:
         ),
         servo_period_ms=(servo.as_float() / 1e6) if servo else None,
         max_feed_override_pct=max_feed_override_pct(ini),
+        program_dir=programs,
+        program_dir_reason=programs_reason,
     )
 
 
@@ -299,14 +334,16 @@ def joint_config_from_profile(profile: MachineProfile) -> Dict[int, Dict]:
     """Per-joint homing config for the adapter, keyed by joint number."""
     cfg = load_machine_config(profile)
     if not cfg.present:
-        # No INI: assume nothing. Three axes with no homing config so the UI can
-        # still render a gate rather than crashing.
+        # No INI: assume nothing. Three axes so the UI can still render a
+        # gate rather than crashing, with no homing config: None is "not
+        # known" (state.JointHoming), never an invented order, limit
+        # setting or search direction (P0 cleanup).
         return {
             i: {
                 "axis": a,
-                "HOME_SEQUENCE": i,
-                "HOME_IGNORE_LIMITS": False,
-                "HOME_SEARCH_VEL": 0.0,
+                "HOME_SEQUENCE": None,
+                "HOME_IGNORE_LIMITS": None,
+                "HOME_SEARCH_VEL": None,
             }
             for i, a in enumerate(("X", "Y", "Z"))
         }

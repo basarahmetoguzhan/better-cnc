@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SIMULATOR ONLY: stands in for the three hm2_eth link-health HAL items the
-UI reads, so LinuxCncAdapter._read_hal runs against real HAL pins.
+UI reads, so LinuxCncAdapter._read_hal runs against real HAL pins, and
+gives the five switch inputs the UI reads their rig names.
 
 There is no board in the simulator. The values here are not readings of
 anything: they start "healthy" and change only when you change them.
@@ -12,6 +13,15 @@ Same names, types and directions as the driver creates on the rig:
     hm2_7i92.0.io_error             bit param, HAL_RW  hostmot2.c:1446
 
 (paths under reference/linuxcnc/src/hal/drivers/mesa-hostmot2/).
+
+The switch inputs, hm2_7i92.0.gpio.020.in_not ... gpio.024.in_not, have the
+driver's names (ioport.c:246-265) but NOT its direction: on the rig the
+driver writes them (HAL_OUT) from the board; here they are HAL_IN readers.
+sim/test-rig-sim.hal adds each to the switch signal test-rig.hal nets it
+to, whose one writer stays the simulated switch (sim_home_switch), so the
+UI's LinuxCncAdapter._read_live_hal reads the switch state under the rig's
+pin names (hal.get_value of a pin on a signal reads the signal,
+reference/linuxcnc/src/hal/halmodule.cc:1037-1044).
 
 Fault injection, from `sim/sim.sh halcmd ...`:
 
@@ -63,6 +73,13 @@ def main() -> int:
     comp.newpin("packet-error-total", hal.HAL_U32, hal.HAL_IO)
     comp.newpin("watchdog.has_bit", hal.HAL_BIT, hal.HAL_IO)
     comp.newparam("io_error", hal.HAL_BIT, hal.HAL_RW)
+    # The rig's switch inputs (configs/test-rig/test-rig.hal, SWITCHES) as
+    # readers, not the driver's writers: see the docstring.
+    comp.newpin("gpio.020.in_not", hal.HAL_BIT, hal.HAL_IN)   # X right: + limit
+    comp.newpin("gpio.021.in_not", hal.HAL_BIT, hal.HAL_IN)   # X left: home, - limit
+    comp.newpin("gpio.022.in_not", hal.HAL_BIT, hal.HAL_IN)   # Y rear: + limit
+    comp.newpin("gpio.023.in_not", hal.HAL_BIT, hal.HAL_IN)   # Y front: home, - limit
+    comp.newpin("gpio.024.in_not", hal.HAL_BIT, hal.HAL_IN)   # Z top: home, + limit
     # SIMULATOR ONLY, not a driver item: holds the link down.
     comp.newparam("sim-link-down", hal.HAL_BIT, hal.HAL_RW)
     comp.ready()

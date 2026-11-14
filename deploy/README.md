@@ -290,14 +290,23 @@ için `disable`; bu, kiosktan önceki masaüstünü geri açar.
 
 ## Test tezgahında ne zaman açılmalı
 
-**Faz 1–9 (PLAN-BUGUN) bitmeden açmayın.** (2026-11-12: Faz 1–8 geçti; bekleyenler Faz 9,
-aşağıdaki iki eksik ve PC'nin normal açılışı, OPEN-QUESTIONS B10.) Kiosk axis'in yerini alır. Fazlarda
-axis'in kullanılan özellikleri bizim arayüzde henüz yok:
+**Faz 1–9 (PLAN-BUGUN) ve PC deneme listesi bitmeden açmayın.** (2026-11-12: Faz 1–8 geçti;
+bekleyenler Faz 9, arayüzün makinede denenmesi ve PC'nin normal açılışı, OPEN-QUESTIONS B10.)
+Kiosk axis'in yerini alır. Fazlarda axis'in kullanılan iki özelliği arayüzde yoktu; ikisi de
+**kapandı** (Mac'te, sahte LinuxCNC ve simülatörle; makinede henüz denenmedi):
 
-- Faz 6.2: eksenleri tek tek home'lama (bizde yalnız "Tümünü referansla" var).
-- Faz 8: G-code programı açıp koşturma (Program ekranında dosya seçimi yok).
+- ~~Faz 6.2: eksenleri tek tek home'lama~~ — kapandı (2026-11-14): her eksenin çipinde
+  «Z referansla» (docs/11, "M"), simülatörde denendi (`sim/e2e/test_homing.py`).
+- ~~Faz 8: G-code programı açıp koşturma~~ — kapandı (2026-11-14): Program ekranı
+  `PROGRAM_PREFIX` dizinini listeler ve seçileni yükler; duraklat / devam / tek adım da var
+  (docs/11, "H"); simülatörde yüklenip sonuna kadar koşturuldu (`sim/e2e/test_program.py`,
+  `sim/e2e/test_run.py`; kiosk'ta da aynı liste).
 
-`install` şimdiden yapılabilir. Fazlar bitip bu iki eksik kapanınca `enable`.
+AXIS ile arayüz arasında elle geçiş (kiosk servisi olmadan) ve makinede yapılacak denemelerin
+tam listesi: [docs/12-operator-handover.md](../docs/12-operator-handover.md).
+
+`install` şimdiden yapılabilir. **`enable` kararı** o listenin 22. adımıdır: önceki adımlar
+makinede geçtikten ve kullanıcı karar verdikten sonra; ilk kiosk açılışında kısa duman testiyle.
 Mermer makinesinde (Pi 4) kiosk baştan açık olacak.
 
 ---
@@ -325,6 +334,10 @@ Her birinin dayandığı iki sayı:
 | `ACTION_TIMEOUT_MS` | 4 s | Eylemin kendi beklemeleri ~1,2 s; görev takılırsa 5 s'ye varır | Normal eylem "sonuç bilinmiyor" görünür / operatör sonucu geç öğrenir |
 | `LOST_MS` | 3 s | Normal en uzun boşluk ~2,2 s (1 s yenileme + 1,2 s yavaş cevap) | Yanlış "bağlantı yok" / donmuş ekran daha uzun canlı görünür |
 | `BOOT_MS` | 10 s | Simülatörde LinuxCNC + arayüz yeniden başlaması ~8 s (5 s bekleme + ~3 s açılış). **Ölçülecek** | Her yeniden başlatmada başlatma ekranına gidip gelir / sebep ekranı geç gelir |
+| `INSTANT_GUARD_MS` | 0,5 s | ACİL STOP ve DURDUR basışta (pointerdown) gider; aynı basışın ardından gelen tıklama bu süre içinde yok sayılır. Klavyeyle (Enter/Space) basılan, öncesinde basış olmayan tıklama gönderilir. Seçildi, ölçülmedi | Çok uzun bir basışın tıklaması ikinci kez gönderilebilir (zararsız: ikinci durdurma) / klavye basışı bir basıştan hemen sonra yok sayılabilir |
+| `SWAP_AFTER_UP_MS` | 0,05 s | Basılıyken gelen ekran yenilemesi bırakıştan bu kadar sonra uygulanır: tıklama olayı bırakışın hemen ardından gelir, düğme o sırada yerinde olmalı. Seçildi, ölçülmedi | Yenileme tıklamadan önce düğmeyi değiştirip tıklamayı kaybettirebilir / ekran bırakıştan sonra biraz geç yenilenir |
+| `SWAP_HOLD_MAX_MS` | 3 s | Basılı tutulan bir parmak ya da fare ekranı en çok bu kadar dondurur: `LOST_MS` ile aynı, cevapsız ekranın örtüldüğü süre. Daha uzun basış zaten tıklama değildir | Uzun basışlı tıklama yenilemeye kaybolabilir / yaslanan bir parmak ekranı daha uzun eski gösterir |
+| `READY_MARGIN_MS` | 0,03 s | Onay bandındaki «Evet», sorudan `CONFIRM_MIN_S` sonra açılır; bant kaç ms kaldığını söyler (`data-ready-in-ms`), sayfa o an + bu pay kadar sonra bir kez yeniler (P0 temizliği; önceden sonraki 1 Hz yenilemeyi, 1-2 s, bekliyordu). Sunucu kuralı aynı: erken «Evet» cevap sayılmaz. Seçildi, ölçülmedi | Yenileme sunucunun saatinden önce gelir, «Evet» bir sonraki yenilemeye kalır / «Evet» biraz geç açılır |
 
 ### Kiosk
 
@@ -353,8 +366,8 @@ Her birinin dayandığı iki sayı:
 | hm2 watchdog `timeout_ns` | 5 ms | `watchdog.c:172` | Servo periyodu 1 ms → 5 döngü kaçarsa ısırır. Gecikme ölçülünce gözden geçirilecek |
 | hm2_eth `packet-error-limit` | 10 | `hm2_eth.c:1532` | Bu kadar hata birikince kalıcı iletişim hatası |
 | hm2_eth `packet-read-timeout` | servo periyodunun %80'i | `hm2_eth.c:1524` | — |
-| `WAIT_TIMEOUT_S` (adaptör) | 0,25 s | docs/11 | 25 görev döngüsü; seçildi. **Ölçülecek** |
-| Acil stoptan çıkma süresi | 0,3 s | docs/11 | 3 × `[EMCIO]CYCLE_TIME`; seçildi. **Ölçülecek** |
+| `WAIT_TIMEOUT_S` (adaptör) | 0,25 s | docs/11 | 25 görev döngüsü; seçildi. **Ölçülecek** (OPEN-QUESTIONS B13) |
+| Acil stoptan çıkma süresi | 0,3 s | docs/11 | 3 × `[EMCIO]CYCLE_TIME`; seçildi. **Ölçülecek** (OPEN-QUESTIONS B13) |
 
 ## Simülatörde denemek
 

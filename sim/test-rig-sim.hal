@@ -16,7 +16,10 @@
 #               second motor, stepgen.03 on the rig, has no counterpart)
 #               hm2_eth link pins ->  sim/hm2_link_stub.py, same names
 #               the five switches ->  sim_home_switch, netted as test-rig.hal
-#                                     nets them (connected there 2026-11-12)
+#                                     nets them (connected there 2026-11-12);
+#                                     each signal also carries the stub's
+#                                     gpio.0NN.in_not pin, so the UI reads the
+#                                     switches under the rig's pin names
 #
 # Switch positions follow the rig's travel as measured on 2026-11-12 (Faz 4,
 # docs/board-dumps/rig-measurements-2026-11-12.json); see SWITCHES below. They
@@ -112,6 +115,16 @@ net x-max-limit  sim-x-max.home-sw => joint.0.pos-lim-sw-in
 net y-home-limit sim-y-min.home-sw => joint.1.home-sw-in joint.1.neg-lim-sw-in
 net y-max-limit  sim-y-max.home-sw => joint.1.pos-lim-sw-in
 net z-home-limit sim-z-top.home-sw => joint.2.home-sw-in joint.2.pos-lim-sw-in
+
+# The rig's input pins on the same signals, as READERS (sim/hm2_link_stub.py
+# makes them HAL_IN): on the rig hm2 writes them, here the simulated switch
+# above stays each signal's one writer. The UI reads these names
+# (profiles.TEST_RIG_INPUTS hal_pin) for the Alarmlar Durum column.
+net x-max-limit  hm2_7i92.0.gpio.020.in_not
+net x-home-limit hm2_7i92.0.gpio.021.in_not
+net y-max-limit  hm2_7i92.0.gpio.022.in_not
+net y-home-limit hm2_7i92.0.gpio.023.in_not
+net z-home-limit hm2_7i92.0.gpio.024.in_not
 
 
 # =============================================================================

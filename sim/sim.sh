@@ -7,6 +7,10 @@
 #   sim/sim.sh logs             the UI's output (LinuxCNC's own log: `log`)
 #   sim/sim.sh log              LinuxCNC's log inside the container
 #   sim/sim.sh halcmd ARGS...   e.g. `halcmd show pin joint.0`, `halcmd sets watchdog TRUE`
+#   sim/sim.sh press X+|X-|Y+|Y-|Z+   a limit switch reads pressed where the axis stands
+#                               (sim/e2e/harness.py press; refuses where it cannot)
+#   sim/sim.sh release [END...] the switches (all, or those named) back where the HAL file has them
+#   sim/sim.sh switches         each simulated switch: position, motor position, state
 #   sim/sim.sh shell            a shell in the running container
 #   sim/sim.sh test             the test suite (`make test`) inside the image (Python 3.13, arm64, real linuxcnc module)
 #   sim/sim.sh kiosk            deploy/'s kiosk (cage + chromium + LinuxCNC + UI), headless
@@ -58,6 +62,10 @@ case "$cmd" in
     docker exec "$NAME" cat /tmp/better-cnc-sim/linuxcnc.log ;;
   halcmd)
     docker exec "$NAME" halcmd "$@" ;;
+  press|release|switches)
+    # The switch helpers of the e2e harness, so both move switches one way
+    # (sim/README.md, "Limit switch canlandırma").
+    docker exec -e PYTHONDONTWRITEBYTECODE=1 "$NAME" python3 /repo/sim/e2e/harness.py "$cmd" "$@" ;;
   shell)
     docker exec -it "$NAME" bash ;;
   test)
@@ -84,7 +92,7 @@ case "$cmd" in
     echo "kiosk durduruldu" ;;
   lint)
     docker run --rm --platform linux/arm64 -e LANG=C.UTF-8 -v "$REPO:/repo:ro" -w /repo "$IMAGE" bash -c '
-      shellcheck -x sim/*.sh deploy/kiosk.sh deploy/machine.sh deploy/bootstrap-ssh.sh \
+      shellcheck -x sim/*.sh sim/e2e/*.sh deploy/kiosk.sh deploy/machine.sh deploy/bootstrap-ssh.sh \
         deploy/kiosk-session deploy/bettercnc-display deploy/kiosk-browser sim/headless_display.sh \
         scripts/fetch-reference.sh scripts/detect-board.sh &&
       echo "shellcheck: temiz" &&

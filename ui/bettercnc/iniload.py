@@ -119,9 +119,11 @@ class IniValue(NamedTuple):
 class IniFile:
     """Parsed INI with provenance. Read-only."""
 
-    def __init__(self, path: str, values: Dict[Tuple[str, str], IniValue]):
+    def __init__(self, path: str, values: Dict[Tuple[str, str], IniValue],
+                 repeats: Optional[Dict[Tuple[str, str], List[str]]] = None):
         self.path = path
         self._values = values
+        self._repeats = repeats or {}
 
     # -- lookup ---------------------------------------------------------------
 
@@ -136,6 +138,15 @@ class IniFile:
                 "for a hardware value".format(section, key, self.path)
             )
         return v
+
+    def get_all(self, section: str, key: str) -> List[str]:
+        """Every value of a key that may repeat, in file order, as
+        IniFile::Find(..., num) walks them for [RS274NGC]REMAP
+        (rs274ngc_pre.cc:1030-1035) - from every [SECTION] block, where
+        Find walks the first only (inifile.cc:225-265): a section written
+        twice gives more values here, which for the MDI gate errs towards
+        refusing. get() keeps the first, as LinuxCNC's plain Find does."""
+        return list(self._repeats.get((section, key), ()))
 
     def sections(self) -> List[str]:
         out: List[str] = []
@@ -210,6 +221,8 @@ def parse_ini_text(text: str, path: str = "<string>") -> IniFile:
     first line for a key win (module docstring).
     """
     values: Dict[Tuple[str, str], IniValue] = {}
+    #: Every value line of each key in a section's first occurrence (get_all).
+    repeats: Dict[Tuple[str, str], List[str]] = {}
     #: Keys LinuxCNC has already matched once, with or without a value: a
     #: later line for the same key is never reached (inifile.cc:354).
     matched: Set[Tuple[str, str]] = set()
@@ -272,6 +285,8 @@ def parse_ini_text(text: str, path: str = "<string>") -> IniFile:
             if raw is not None and pending:
                 governing = "\n".join(pending)
                 pending = []
+            if section is not None and raw is not None:
+                repeats.setdefault((section, key), []).append(raw)
             if section is None or (section, key) in matched:
                 continue
             # The first line for the key decides, with or without a value.
@@ -288,7 +303,7 @@ def parse_ini_text(text: str, path: str = "<string>") -> IniFile:
 
         # Anything else is ignored and leaves `pending` alone, as above.
 
-    return IniFile(path, values)
+    return IniFile(path, values, repeats)
 
 
 def _after_equal(rest: str) -> Optional[str]:

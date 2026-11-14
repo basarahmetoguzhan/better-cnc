@@ -1081,10 +1081,11 @@ class TestStatusLabelPriority(unittest.TestCase):
         """The ladder's order is not hypothetical. map_linuxcnc_state derives
         program_running from file, paused and interp_state alone, so a stat in
         STATE_ESTOP with a file still READING maps to running=True. The label
-        must still say the machine is disabled."""
+        must still say the machine is disabled. (Plan WP09: running is AUTO
+        with the interpreter busy and nothing paused, the file aside.)"""
         st = _map(
             load_profile("test-rig"),
-            _stat(task_state=TASK_STATE_ESTOP, file="a.ngc",
+            _stat(task_state=TASK_STATE_ESTOP, file="a.ngc", task_mode=2,
                   interp_state=EMC_TASK_INTERP_READING),
             {"connected": True},
         )
@@ -1314,13 +1315,14 @@ class TestStatusUnknown(unittest.TestCase):
         )
         # Drive power is a HAL reading and keeps its own row.
         self.assertEqual(e["drive_power_label"], known["drive_power_label"])
-        h = VM.homing_panel(self.unknown, self.config)
+        h = VM.homing_panel(self.unknown, self.config, self.profile)
         self.assertIsNone(h["all_homed"])
         self.assertEqual(
             {(j["phase"], j["label"], j["homed"], j["severity"]) for j in h["joints"]},
             {("unknown", "bilinmiyor", None, "warn")},
         )
-        self.assertEqual(h["order_label"], VM.homing_panel(self.known, self.config)["order_label"])
+        self.assertEqual(h["order_label"],
+                         VM.homing_panel(self.known, self.config, self.profile)["order_label"])
         self.assertEqual(
             re.findall(r'data-phase="([^"]*)"', self.markup(self.unknown)), ["unknown"] * 3
         )
@@ -1543,6 +1545,7 @@ class TestCitationsBySymbol(unittest.TestCase):
             ("tests", "test_unmeasured.py"),
             ("tests", "test_inputmap_and_link.py"),
             ("tests", "test_homing_gate.py"),
+            ("tests", "test_state_plumbing.py"),
         )
     )
 
@@ -1697,3 +1700,60 @@ class TestReferencePins(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestJointsByNumber(unittest.TestCase):
+    """P0 cleanup item 10: with a [JOINT_n] missing, every joint is read by
+    its own number - stat.joint is indexed by joint number
+    (emcmodule.cc:612-618) - not by its place in the list. Before, Z on
+    joint 2 read joint 1's homing and hard-limit flags and got the wrong
+    joint number and HOME_SEQUENCE."""
+
+    SKIPS_ONE = ("[TRAJ]\nCOORDINATES = X Y Z\nLINEAR_UNITS = mm\n"
+                 + _synthetic_joint(0) + _synthetic_joint(2))
+
+    def test_the_pure_mapping(self):
+        cfg = {0: {"axis": "X", "HOME_SEQUENCE": 1, "HOME_IGNORE_LIMITS": True,
+                   "HOME_SEARCH_VEL": -1.0},
+               2: {"axis": "Z", "HOME_SEQUENCE": 0, "HOME_IGNORE_LIMITS": False,
+                   "HOME_SEARCH_VEL": 2.0}}
+        joints = [{"homed": 0, "homing": 0}, {"homed": 1, "homing": 0, "max_hard_limit": 1},
+                  {"homed": 0, "homing": 1, "min_hard_limit": 1}]
+        state = map_linuxcnc_state(
+            stat=_stat(joint=joints), hal_values={}, profile=load_profile("test-rig"),
+            joint_axis_map=["X", "Z"], joint_config=cfg, joint_numbers=[0, 2])
+        z = state.homing.joints[1]
+        self.assertEqual((z.joint, z.axis, z.phase, z.sequence, z.ignore_limits, z.search_vel),
+                         (2, "Z", HomingPhase.HOMING, 0, False, 2.0))
+        self.assertEqual(state.homing.order_label, "Z → X")
+        lim = state.hard_limits[1]
+        self.assertEqual((lim.joint, lim.axis, lim.min, lim.max), (2, "Z", True, None))
+        with self.assertRaises(ValueError):
+            map_linuxcnc_state(stat=_stat(joint=joints), hal_values={},
+                               profile=load_profile("test-rig"), joint_axis_map=["X", "Z"],
+                               joint_config=cfg, joint_numbers=[0])
+
+    def test_the_real_adapter_reads_z_from_joint_2(self):
+        import fake_linuxcnc as F
+        import test_linuxcnc_adapter as T
+        profile = _profile_for_ini(self, self.SKIPS_ONE)
+        case = T.FakeCase("run")
+        case.setUp()
+        try:
+            adapter = case.make(profile=profile)
+            machine = case.machine
+            machine.power_on()
+            machine.homed[1] = 1               # joint 1: in no [JOINT_n]
+            machine.hard_min[1] = 1
+            phases = {j.axis: (j.joint, j.phase) for j in adapter.snapshot().homing.joints}
+            self.assertEqual(phases, {"X": (0, HomingPhase.NOT_HOMED),
+                                      "Z": (2, HomingPhase.NOT_HOMED)})
+            machine.homed[1], machine.homed[2] = 0, 1
+            snap = adapter.snapshot()
+            self.assertEqual({j.axis: j.phase for j in snap.homing.joints},
+                             {"X": HomingPhase.NOT_HOMED, "Z": HomingPhase.HOMED})
+            self.assertEqual([(h.joint, h.min) for h in snap.hard_limits], [(0, False), (2, False)])
+            mock = MockAdapter(profile)
+            self.assertEqual([j.joint for j in mock.snapshot().homing.joints], [0, 2])
+        finally:
+            case.doCleanups()

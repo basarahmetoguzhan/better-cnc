@@ -10,7 +10,7 @@
 # Shallow (one commit each) and pinned by full hash: cloning the 2.9 branch
 # instead would bring whatever 2.9 has become, and the line numbers cited
 # across docs/ and ui/ would drift. Without reference/ the suite still runs;
-# 21 tests that check the fakes, the citations and these pins against the source skip.
+# 64 tests that check the fakes, the citations and these pins against the source skip.
 #
 # A tree already there at the pinned commit is left alone; one at another
 # commit is reported and left alone too - move it away to fetch again.

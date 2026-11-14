@@ -8,6 +8,9 @@
 
   var app = document.getElementById("app");
   var screen = (window.__VM__ && window.__VM__.screen) || "kontrol";
+  // The Program list's page (P0 cleanup): the browser's own view state, like
+  // `screen` - sent with every render and action, never an action itself.
+  var programPage = 0;
   // Kiosk mode only (app.py --boot-url): where to go once the UI is gone.
   var bootUrl = (window.__VM__ && window.__VM__.boot_url) || "";
 
@@ -30,6 +33,10 @@
   var ACTION_TIMEOUT_MS = 4000;  // an action's own bounded waits, ~1.2 s, with room
   var LOST_MS = 3000;            // longer than any normal gap (~2.2 s), short enough to notice
   var BOOT_MS = 10000;           // a LinuxCNC + UI restart usually comes back before this
+  // The stop rail and the held press (below):
+  var INSTANT_GUARD_MS = 500;    // a click this soon after a rail button's pointerdown is the same press
+  var SWAP_AFTER_UP_MS = 50;     // a re-render held for a press waits this long after the release
+  var SWAP_HOLD_MAX_MS = 3000;   // ...and is never held longer than LOST_MS from the press
   var lastOk = Date.now();
   var inFlight = false;
   var bootAsking = false;
@@ -47,7 +54,8 @@
   // The overlay keeps an estop button (audit 2026-10-21: it used to cover
   // the one estop this rig has). The server runs software_estop without
   // taking its lock, so a server that is slow rather than dead still acts
-  // on it; the page cannot tell which, and says so.
+  // on it; the page cannot tell which, and says so. It fires on the press,
+  // like the rail's (data-instant, handled below).
   function showLost(text) {
     if (!overlay) {
       overlay = document.createElement("div");
@@ -64,8 +72,9 @@
     var estop = document.createElement("button");
     estop.type = "button";
     estop.className = "lost-estop";
+    estop.setAttribute("data-action", "software_estop");
+    estop.setAttribute("data-instant", "1");
     estop.textContent = "YAZILIM ACİL STOP GÖNDER";
-    estop.addEventListener("click", sendLostEstop);
     overlay.appendChild(estop);
     if (lostEstop) overlay.appendChild(line("lost-sent", lostEstop));
   }
@@ -133,22 +142,80 @@
     return r.json();
   }
 
-  function post(action, value) {
+  // answered / failed: optional, for the stop rail's band (fireInstant).
+  function post(action, value, answered, failed) {
     return timed("/api/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: action, value: value, screen: screen })
+      body: JSON.stringify({ action: action, value: value, screen: screen, page: programPage })
     }, ACTION_TIMEOUT_MS)
       .then(json)
-      .then(function (data) { connectionOk(); swap(data); })
+      .then(function (data) { if (answered) answered(); connectionOk(); swap(data); })
       .catch(function () {
+        if (failed) failed();
         showLost("Komut gönderilemedi: kontrol programı cevap vermedi. " +
                  "Komutun makineye ulaşıp ulaşmadığı bilinmiyor.");
       });
   }
 
+  // ---- presses survive the 1 Hz re-render ---------------------------------
+  // A mouse press that spans a swap was lost: the button under the pointer
+  // is a new node at mouseup, and Chrome then fires no click (headless
+  // Chrome, 2026-11-13: 5 of 5 presses across a swap gave no click, 5 of 5
+  // between swaps did; touch taps survived). So while a pointer pressed
+  // inside #app is down, a swap waits - only the newest answer is kept -
+  // until SWAP_AFTER_UP_MS after the release, and never longer than
+  // SWAP_HOLD_MAX_MS from the press: a screen held longer would look live
+  // while stale. A press on the rail or the overlay holds nothing: neither
+  // is swapped, and the estop's answer should show at once.
+  var down = {};            // pointerId -> true while pressed
+  var downCount = 0;
+  var downSince = 0;
+  var releaseTimer = null;
+  var pendingSwap = null;
+
+  function pressHeld() {
+    return (downCount > 0 || releaseTimer !== null) &&
+           Date.now() - downSince < SWAP_HOLD_MAX_MS;
+  }
+
+  function pointerPressed(ev) {
+    var now = Date.now();
+    // A release we never heard of (outside the window, say) must not hold
+    // the next press's swaps for good.
+    if (now - downSince >= SWAP_HOLD_MAX_MS) { down = {}; downCount = 0; }
+    if (!down[ev.pointerId]) { down[ev.pointerId] = true; downCount++; }
+    if (downCount === 1) downSince = now;
+  }
+
+  function pointerReleased(ev) {
+    if (down[ev.pointerId]) { delete down[ev.pointerId]; downCount--; }
+    if (downCount > 0) return;
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(function () {
+      releaseTimer = null;
+      if (pendingSwap && !pressHeld()) {
+        var data = pendingSwap;
+        pendingSwap = null;
+        applySwap(data);
+      }
+    }, SWAP_AFTER_UP_MS);
+  }
+
+  document.addEventListener("pointerup", pointerReleased, true);
+  document.addEventListener("pointercancel", pointerReleased, true);
+
   function swap(data) {
     if (!data || !data.html) return;
+    if (pressHeld()) {
+      pendingSwap = data;
+      return;
+    }
+    pendingSwap = null;
+    applySwap(data);
+  }
+
+  function applySwap(data) {
     var focusName = document.activeElement && document.activeElement.name;
     var caret = null;
     if (document.activeElement && document.activeElement.selectionStart != null) {
@@ -158,6 +225,8 @@
 
     app.innerHTML = data.html;
     if (bootUrl) noTooltips(app);
+    if (sentAnswered === sentToken) hideSent();
+    scheduleReadyRender();
 
     if (focusName) {
       var again = app.querySelector('[name="' + focusName + '"]');
@@ -175,15 +244,96 @@
     }
   }
 
+  // «Evet» on the confirmation band turns on CONFIRM_MIN_S after the question
+  // (app.Session). The band says in how many ms (data-ready-in-ms): one extra
+  // render then, so it turns on at that moment, not at the next 1 Hz poll
+  // (1-2 s later). The server's rule stands: an early «Evet» is no answer.
+  var READY_MARGIN_MS = 30;
+  var readyTimer = null;
+
+  function scheduleReadyRender() {
+    var band = app.querySelector("[data-ready-in-ms]");
+    clearTimeout(readyTimer);
+    readyTimer = null;
+    if (!band) return;
+    var ms = parseInt(band.getAttribute("data-ready-in-ms"), 10);
+    if (!(ms > 0)) return;
+    readyTimer = setTimeout(function readyRender() {
+      readyTimer = null;
+      if (inFlight) { readyTimer = setTimeout(readyRender, 50); return; }
+      refresh();
+    }, ms + READY_MARGIN_MS);
+  }
+
   function refresh() {
     if (inFlight) return;  // one poll at a time: never pile up on a slow server
     inFlight = true;
-    timed("/api/render?screen=" + encodeURIComponent(screen), null, POLL_TIMEOUT_MS)
+    timed("/api/render?screen=" + encodeURIComponent(screen) + "&page=" + programPage,
+          null, POLL_TIMEOUT_MS)
       .then(json)
       .then(function (data) { connectionOk(); swap(data); })
       .catch(function () { /* watchConnection() covers the screen */ })
       .then(function () { inFlight = false; });
   }
+
+  // ---- the stop rail: ACİL STOP and DURDUR (render.render_rail) -----------
+  // Buttons marked data-instant post on pointerdown, as AXIS's toolbar estop
+  // fires on the press: no click to lose, no waiting for a release. The
+  // click that follows the press is not sent again; a click with no
+  // pointerdown before it (detail 0: Enter or Space) is the keyboard's, and
+  // is sent. The band under the buttons says at once that it went, until
+  // the server's answer is on the screen.
+  var sent = document.getElementById("rail-sent");
+  var sentToken = 0;        // the latest press with a band
+  var sentAnswered = -1;    // the latest press the server has answered
+  var lastInstantDown = 0;
+
+  function showSent(text) {
+    sentToken++;
+    if (sent) { sent.textContent = text; sent.hidden = false; }
+    return sentToken;
+  }
+
+  function hideSent() {
+    if (sent) { sent.hidden = true; sent.textContent = ""; }
+  }
+
+  function fireInstant(action) {
+    if (action === "software_estop" && overlay) { sendLostEstop(); return; }
+    var token = showSent(action === "software_estop"
+      ? "ACİL STOP GÖNDERİLDİ — onay bekleniyor" : "DURDUR gönderildi");
+    post(action, "", function () { sentAnswered = token; }, hideSent);
+  }
+
+  // The rail's own button for a key: a disabled one (DURDUR in observer
+  // mode) means the key sends nothing either.
+  function railButton(action) {
+    return document.querySelector('#rail button[data-action="' + action + '"]');
+  }
+
+  document.addEventListener("pointerdown", function (ev) {
+    if (app.contains(ev.target)) pointerPressed(ev);
+    if (ev.button !== 0) return;
+    var btn = ev.target.closest && ev.target.closest("button[data-instant]");
+    if (!btn || btn.disabled) return;
+    lastInstantDown = Date.now();
+    fireInstant(btn.getAttribute("data-action"));
+  }, true);
+
+  // Esc = DURDUR, as in AXIS (axis.py binds <Escape> to task_stop), and
+  // Pause = ACİL STOP: wherever the focus is, the MDI field included. The
+  // kiosk keymap leaves both keys alone (deploy/files/xkb). Not on key
+  // repeat: one press, one command.
+  document.addEventListener("keydown", function (ev) {
+    var action = ev.key === "Escape" ? "stop" : (ev.key === "Pause" ? "software_estop" : "");
+    if (!action) return;
+    ev.preventDefault();
+    if (ev.repeat) return;
+    if (action === "software_estop" && overlay) { sendLostEstop(); return; }
+    var btn = railButton(action);
+    if (!btn || btn.disabled) return;
+    fireInstant(action);
+  }, true);
 
   document.addEventListener("click", function (ev) {
     // Buttons only. The MDI <form> carries data-action="mdi" for the submit
@@ -195,8 +345,21 @@
     var action = btn.getAttribute("data-action");
     var value = btn.getAttribute("data-value") || "";
 
+    if (btn.hasAttribute("data-instant")) {
+      ev.preventDefault();
+      if (ev.detail === 0 && Date.now() - lastInstantDown > INSTANT_GUARD_MS) {
+        fireInstant(action);
+      }
+      return;
+    }
     if (action === "screen") {
       screen = value;
+      ev.preventDefault();
+      refresh();
+      return;
+    }
+    if (action === "program_page") {
+      programPage = parseInt(value, 10) || 0;
       ev.preventDefault();
       refresh();
       return;

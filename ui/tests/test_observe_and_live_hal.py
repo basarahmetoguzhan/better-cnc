@@ -23,6 +23,7 @@ import html as htmllib
 import inspect
 import io
 import re
+import types
 import unittest
 from html.parser import HTMLParser
 from typing import Dict, List, Optional
@@ -47,13 +48,32 @@ LINK_PINS = {
     LinkHealth.HAL_IO_ERROR: False,
 }
 #: Every action Session.act knows besides the estop, with a value it takes
-#: (test_server_and_iniload.TestSessionLocking.LOCKED checks that list
-#: against Session.act's source).
+#: (test_server_and_iniload.TestSessionLocking checks that list against
+#: Session.act's source). "stop" is DURDUR (plan WP03): an observer sends
+#: only the estop, so it is dropped too. Not here: "ack_error" (plan WP04),
+#: the error box's «Tamam», which is local - it reaches the adapter in
+#: observer mode too and sends nothing (test_messages pins that).
+#: "recover_limit" is «Limitten kurtar» (plan WP05): dropped like the rest.
+#: Plan WP07: one axis's homing ("home_joint") and the confirmation band's
+#: «Evet» ("confirm") and «Vazgeç» ("cancel_confirm") too - an observer is
+#: never asked anything. Plan WP08: «Yükle» ("load_program", a name the rig's
+#: nc_files/ lists), «Yeniden yükle» ("reload_program") and «Listeyi
+#: yenile» ("refresh_programs") - programs are loaded from AXIS then. Plan
+#: WP09: «Duraklat» ("program_pause"), «Devam» ("program_resume") and
+#: «Adım» ("program_step") - a program is run from AXIS then.
 ACTIONS = (
     ("software_reset", ""), ("home_all", ""), ("jog", "X:1"), ("mdi", "G0 X1"),
     ("mdi_preset", "G0 X0 Y0"), ("program_start", ""), ("program_stop", ""),
-    ("jog_step", "0.1"), ("feed", "100"), ("wcs", "G55"),
+    ("jog_step", "0.1"), ("feed", "100"), ("wcs", "G55"), ("stop", ""),
+    ("recover_limit", ""), ("home_joint", "Z"), ("confirm", "token"),
+    ("cancel_confirm", ""), ("load_program", "faz8-kare.ngc"), ("reload_program", ""),
+    ("refresh_programs", ""), ("program_pause", ""), ("program_resume", ""),
+    ("program_step", ""),
 )
+#: Of those, the ones that never reach the adapter at all, observer or not:
+#: «Vazgeç» only ends the question Session keeps (plan WP07); «Listeyi
+#: yenile» only drops the program list's cache (plan WP08).
+SESSION_ONLY = ("cancel_confirm", "refresh_programs")
 
 
 def esc(text: str) -> str:
@@ -126,13 +146,20 @@ class _Recorder(object):
     def __getattr__(self, name):
         if name.startswith("__"):
             raise AttributeError(name)
-        return lambda *args: self.calls.append(name)
+        return lambda *args, **kwargs: self.calls.append(name)
+
+    def snapshot(self):
+        """«Yeniden yükle» reads the loaded file from it (plan WP08)."""
+        self.calls.append("snapshot")
+        return types.SimpleNamespace(program_file=None)
 
 
 class TestObserveSession(unittest.TestCase):
     def session(self, observe: bool):
         profile = load_profile("test-rig")
-        return app.Session(_Recorder(), profile, load_machine_config(profile), observe=observe)
+        self.now = [100.0]      # Session's clock: «Evet» counts app.CONFIRM_MIN_S after asking
+        return app.Session(_Recorder(), profile, load_machine_config(profile), observe=observe,
+                           clock=lambda: self.now[0])
 
     def test_only_the_estop_reaches_the_adapter(self):
         sess = self.session(observe=True)
@@ -143,11 +170,21 @@ class TestObserveSession(unittest.TestCase):
         self.assertEqual(sess.adapter.calls, ["software_estop"])
 
     def test_without_observe_the_same_actions_do_reach_it(self):
-        """Premise: the recorder sees what Session dispatches."""
+        """Premise: the recorder sees what Session dispatches - each action
+        at least one call (DURDUR makes two: stop_motion, stop_followup).
+        «Evet» reaches it with a question standing (plan WP07), so one is
+        asked first; «Vazgeç» never does (SESSION_ONLY)."""
         sess = self.session(observe=False)
         for action, value in ACTIONS:
-            sess.act(action, value)
-        self.assertEqual(len(sess.adapter.calls), len(ACTIONS))
+            if action in SESSION_ONLY:
+                continue
+            with self.subTest(action=action):
+                if action == "confirm":
+                    value = sess.request_confirm("home_all", "", "?")
+                    self.now[0] += app.CONFIRM_MIN_S
+                before = len(sess.adapter.calls)
+                sess.act(action, value)
+                self.assertGreater(len(sess.adapter.calls), before)
 
     def test_build_session_hands_the_flag_to_both(self):
         self.assertTrue(app.build_session("test-rig", "mock", None, True).observe)
@@ -187,10 +224,16 @@ class TestObserveRealAdapter(FakeAdapterCase):
         calls = (
             ("software_estop_reset", adapter.software_estop_reset),
             ("home_all", adapter.home_all),
+            ("home_joint", lambda: adapter.home_joint("Z")),
             ("jog", lambda: adapter.jog("X", 1)),
             ("load_program", lambda: adapter.load_program("/tmp/a.ngc")),
             ("program_start", adapter.program_start),
-            ("program_stop", adapter.program_stop),
+            ("program_pause", adapter.program_pause),
+            ("program_resume", adapter.program_resume),
+            ("program_step", adapter.program_step),
+            ("recover_limit", adapter.recover_limit),
+            ("stop_motion", adapter.stop_motion),
+            ("stop_followup", adapter.stop_followup),
             ("set_feed_override", lambda: adapter.set_feed_override(100)),
         )
         for name, call in calls:
@@ -275,7 +318,12 @@ class TestObserveRealAdapter(FakeAdapterCase):
 
 
 class TestObserveScreens(unittest.TestCase):
-    ALLOWED = ("screen", "software_estop")
+    #: "ack_error": the error box's «Tamam», local (plan WP04); a ready
+    #: mock shows no error box, test_messages checks it with one.
+    #: "program_page": the Program list's «Önceki» / «Sonraki», the
+    #: browser's own view state like "screen" (P0 cleanup; never a
+    #: Session action, nothing sent) - shown only with more than one page.
+    ALLOWED = ("screen", "software_estop", "ack_error", "program_page")
 
     def test_every_screen_opens_with_the_banner(self):
         for key in sorted(PROFILES):
@@ -307,18 +355,46 @@ class TestObserveScreens(unittest.TestCase):
                         else:
                             self.assertIn("disabled", attrs, (tag, action, attrs))
 
+    def test_a_paged_program_list_pages_and_nothing_else_is_enabled(self):
+        """Review of the P0 cleanup: with more than one page the page
+        buttons render, stay enabled in observer mode (view state) and every
+        other control stays off; "program_page" is no Session action."""
+        import os
+        import tempfile
+        from unittest import mock
+        from bettercnc import programs
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(3):
+                with open(os.path.join(tmp, "p{}.ngc".format(i)), "w") as fh:
+                    fh.write("M2\n")
+            profile = load_profile("test-rig")
+            cfg = load_machine_config(profile)._replace(program_dir=tmp)
+            with mock.patch.object(programs, "PAGE_SIZE", 2):
+                vm = VM.build(profile, cfg, ready_mock().snapshot(), "program", True)
+                controls = _Controls.of(R.render_body(vm))
+        enabled = {a.get("data-action") for t, a in controls if "disabled" not in a}
+        self.assertIn("program_page", enabled)
+        self.assertLessEqual(enabled, set(self.ALLOWED))
+        self.assertNotIn("program_page", {a for a, _ in ACTIONS})
+
     def test_premise_the_same_ready_machine_enables_them_without_observe(self):
         controls = _Controls.of(body("test-rig", "kontrol", ready_mock(), observe=False))
         enabled = {a.get("data-action") for t, a in controls if "disabled" not in a}
-        for action in ("software_estop", "home_all", "jog", "wcs", "jog_step",
+        for action in ("home_all", "jog", "wcs", "jog_step",
                        "mdi_submit", "mdi_preset", "feed"):
             with self.subTest(action=action):
                 self.assertIn(action, enabled)
-        self.assertIn("software_estop", {
-            a.get("data-action") for t, a in _Controls.of(
-                body("test-rig", "kontrol", ready_mock(), observe=True))
-            if "disabled" not in a
-        })
+        # The estop and DURDUR are on the stop rail, outside the body the
+        # poll replaces (plan WP03): the estop stays enabled in observer
+        # mode, DURDUR does not (test_stop_rail has the rest).
+        for observe, wanted in ((False, {"software_estop", "stop"}), (True, {"software_estop"})):
+            with self.subTest(observe=observe):
+                profile = load_profile("test-rig")
+                vm = VM.build(profile, load_machine_config(profile), ready_mock().snapshot(),
+                              "kontrol", observe)
+                rail = _Controls.of(R.render_rail(vm))
+                self.assertEqual({a.get("data-action") for t, a in rail if "disabled" not in a},
+                                 wanted)
         program = _Controls.of(body("test-rig", "program", ready_mock(), observe=False))
         self.assertIn("program_stop", {a.get("data-action") for t, a in program
                                        if "disabled" not in a})

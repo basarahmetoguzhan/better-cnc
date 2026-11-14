@@ -52,6 +52,11 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
   display: inline-block; padding: 6px 14px; border: 1px solid var(--line);
   border-radius: 3px; font-size: 12px; letter-spacing: .09em; font-weight: 600;
 }
+/* LinuxCNC's limit override on (plan WP05): red, beside the state. */
+.override-badge {
+  display: inline-block; margin-right: 10px; padding: 6px 12px; border-radius: 3px;
+  background: var(--bad); color: var(--bg); font-size: 12px; letter-spacing: .06em; font-weight: 700;
+}
 
 /* ---- nav ---- */
 
@@ -101,6 +106,14 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .btn.danger { border-color: var(--bad); color: var(--bad); }
 .btn.jog { min-width: 56px; padding: 12px 0; text-align: center; }
 
+/* ---- the Kontrol limit card (plan WP05), shown only with a switch pressed ---- */
+
+.card.limit { border-color: var(--bad); }
+.limit-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 2px 0; }
+.limit-label { color: #ffb3b8; font-weight: 700; }
+.btn.limit-btn { font-size: 14px; font-weight: 600; padding: 10px 14px; }
+.limit-note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.5; }
+
 /* ---- key/value ---- */
 
 .kv-list { display: flex; flex-direction: column; gap: 4px; }
@@ -127,11 +140,70 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .banner[data-severity="error"] { background: #241a22; }
 .banner[data-severity="warn"] { background: #241f1a; }
 
+/* The top of every screen (render.render_body): the observer banner (in
+   observer mode) and the message band, kept in view together while the
+   screen scrolls - two sticky blocks would slide over each other. Under
+   the stop rail (z-index 50) and the connection overlay. */
+.top-stick { position: sticky; top: 0; z-index: 6; background: var(--bg); }
+
 /* Observer mode (app.py --observe): on top of every screen, and kept in
-   view while the screen scrolls. */
+   view while the screen scrolls (inside .top-stick). */
 .observe { position: sticky; top: 0; z-index: 5; background: var(--bg); padding-bottom: 4px; }
 .observe .banner { margin-top: 0; font-size: 13.5px; }
 .observe .banner-text { color: var(--fg); font-weight: 600; }
+
+/* ---- message band (render.render_msgband) ----
+   The operator message on the left, grey / yellow / red by severity; the
+   error box on the right while there is one: time, the Turkish text at
+   19 px, LinuxCNC's own text small under it, «Tamam». It replaced the old
+   footer line (12.5 px grey, overwritten by the next message). */
+
+.msgband {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 16px;
+  padding: 2px 0 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line);
+}
+.msg-line { flex: 1 1 260px; min-height: 22px; padding-top: 3px; font-size: 14px; line-height: 1.45; color: var(--muted); }
+.msg-line[data-severity="warn"] { color: var(--warn); }
+.msg-line[data-severity="error"] { color: var(--bad); }
+.errbox {
+  flex: 1 1 380px; max-width: 760px;
+  display: grid; grid-template-columns: 1fr auto; gap: 3px 14px; align-items: center;
+  padding: 10px 12px; border: 2px solid var(--bad); border-left-width: 6px; border-radius: 4px;
+  background: #2a1519;
+}
+.errbox-head { grid-column: 1; display: flex; gap: 10px; align-items: baseline; }
+.errbox-label { color: var(--bad); font-size: 11px; font-weight: 700; letter-spacing: .1em; }
+.errbox-time { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.errbox-text { grid-column: 1; color: #ffb3b8; font-size: 19px; font-weight: 700; line-height: 1.3; }
+.errbox-raw { grid-column: 1; color: var(--muted-dim); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.btn.errbox-ack {
+  grid-column: 2; grid-row: 1 / span 3; min-width: 96px; min-height: 52px;
+  font-size: 17px; font-weight: 700; color: #fff; border: 2px solid var(--bad); background: #5c1a1f;
+}
+.btn.errbox-ack:hover { color: #fff; border-color: #ff8a80; }
+
+/* ---- the confirmation band (render.render_confirm, plan WP07) ----
+   Under the message band on every screen while a question stands: what
+   will move, large, then «Evet» and «Vazgeç», big enough to hit. Inside
+   .top-stick, so it stays in view; never over the stop rail. «Evet» is
+   not amber: amber is DURDUR's. */
+.confirm {
+  margin: 0 0 10px; padding: 10px 12px; border: 2px solid var(--warn); border-left-width: 6px;
+  border-radius: 4px; background: #241f1a;
+}
+.confirm[data-confirm="refused"] { border: 0; padding: 0; background: transparent; }
+.confirm[data-confirm="refused"] .banner { margin: 0; }
+.confirm-head { display: flex; gap: 10px; align-items: baseline; }
+.confirm-label { color: var(--warn); font-size: 11px; font-weight: 700; letter-spacing: .1em; }
+.confirm-text { color: var(--fg); font-size: 17px; font-weight: 600; line-height: 1.4; }
+.confirm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.btn.confirm-yes, .btn.confirm-no { min-width: 112px; min-height: 48px; font-size: 16px; font-weight: 700; }
+.btn.confirm-yes { color: #fff; background: var(--acc-deep); border: 2px solid var(--acc-light); }
+.btn.confirm-yes:hover:not(:disabled) { color: #fff; border-color: #fff; }
+/* Off for its first second (app.CONFIRM_MIN_S): a double tap must not answer. */
+.btn.confirm-yes:disabled { color: var(--off-fg); background: transparent; border-color: var(--off-line); }
+.btn.confirm-no { border-width: 2px; }
+.confirm-hint { color: var(--muted); font-size: 12px; }
 
 /* ---- estop ---- */
 
@@ -144,7 +216,55 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .estop-l em { color: var(--muted-dim); font-style: normal; font-size: 11px; }
 .estop-v { font-family: var(--mono); font-size: 13px; font-weight: 600; text-align: right; }
 .estop-d { grid-column: 1 / -1; color: var(--muted-dim); font-size: 11.5px; line-height: 1.5; }
-.estop-controls { display: flex; gap: 6px; margin-top: 10px; }
+.estop-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.estop-where { color: var(--muted-dim); font-size: 11px; }
+
+/* ---- the stop rail (render.render_rail) ----
+   Fixed at the right edge, outside #app - the part the 1 Hz poll replaces -
+   so it is on every screen and a press on it is never lost to a re-render.
+   #app keeps clear of it; only the connection overlay (.lost) covers it,
+   and that has an estop of its own. ACİL STOP at least 96 x 96 px and
+   DURDUR at least 72 px high, also on a narrow screen (below). */
+
+:root { --rail-w: 132px; }
+#app { margin-right: var(--rail-w); }
+/* The buttons must fit inside the padding and the 1 px border: wider, they
+   made the rail scroll sideways (overflow-y: auto turns overflow-x to auto
+   as well; measured in Chrome, review of plan WP03). */
+.rail {
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--rail-w); z-index: 50;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 12px 9px; overflow-x: hidden; overflow-y: auto;
+  background: var(--surf); border-left: 1px solid var(--line);
+  -webkit-user-select: none; user-select: none; touch-action: manipulation;
+}
+.rail-estop, .rail-stop {
+  width: 112px; font: inherit; font-weight: 800; letter-spacing: .05em; line-height: 1.15;
+  border-radius: 8px; cursor: pointer; touch-action: manipulation;
+}
+.rail-estop { height: 112px; font-size: 22px; color: #fff; background: #c62828; border: 3px solid #ff8a80; }
+.rail-estop:active { background: #8e1c1c; }
+.rail-stop { height: 84px; font-size: 19px; color: #1d1500; background: var(--warn); border: 3px solid #ffd27a; }
+.rail-stop:active:not(:disabled) { background: #c7860f; }
+.rail-stop:disabled {
+  color: var(--off-fg); background: transparent; border: 2px dashed var(--off-line); cursor: not-allowed;
+}
+.rail-why { color: var(--warn); font-size: 11px; line-height: 1.4; text-align: center; }
+.rail-hint { color: var(--muted-dim); font-size: 11px; line-height: 1.4; text-align: center; }
+.rail-key { display: block; white-space: nowrap; }
+/* app.js shows it the moment a rail button is pressed. */
+.rail-sent {
+  width: 100%; padding: 8px 6px; border: 1px solid var(--bad); border-radius: 4px;
+  background: #5c1a1f; color: #fff; font-size: 12px; font-weight: 700; line-height: 1.35;
+  text-align: center;
+}
+.rail-sent[hidden] { display: none; }
+@media (max-width: 700px) {
+  :root { --rail-w: 116px; }
+  .rail-estop, .rail-stop { width: 96px; }
+  .rail-estop { height: 96px; font-size: 19px; }
+  .rail-stop { height: 72px; font-size: 17px; }
+}
 
 /* ---- homing ---- */
 
@@ -159,12 +279,31 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .home-ax { font-family: var(--mono); font-size: 15px; font-weight: 600; }
 .home-st { font-size: 11px; }
 .home-seq, .home-dir { color: var(--muted-dim); font-size: 10.5px; }
+/* One axis homed alone (plan WP07), its button in the axis's chip. */
+.home-chip .btn.home-btn { margin-top: 6px; }
 
 /* ---- gate ---- */
 
 .gate-list { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: #cfd3e5; line-height: 1.6; }
 .gate-list.warn { color: var(--muted); }
 .gate-warn-title { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--warn); margin-top: 12px; }
+
+/* ---- the program list (render.render_program, plan WP08) ---- */
+.prog-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.prog-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #21232f; }
+.prog-row:last-child { border-bottom: 0; }
+.prog-row[data-loaded="1"] .prog-name { color: var(--ok); }
+.prog-name { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; min-width: 0; flex: 1 1 180px; }
+.prog-meta { color: var(--muted-dim); font-size: 11.5px; white-space: nowrap; }
+.prog-tag { color: var(--ok); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; }
+.prog-row .btn.prog-btn { margin-left: auto; }
+.prog-pages { align-items: center; }
+.prog-count { margin-left: 4px; }
+.prog-row .prog-reason { width: 100%; margin-top: 0; }
+.prog-path { color: var(--muted-dim); font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; padding: 2px 0 4px; }
+/* the run line (plan WP09): «Satır N / M · %P» and the line's text */
+.prog-run { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 8px; font-size: 13px; }
+.prog-line { font-family: var(--mono); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; min-width: 0; }
 
 /* ---- DRO ---- */
 
@@ -187,6 +326,8 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .jog-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; flex: 1; }
 .jog-z { display: grid; grid-template-rows: repeat(3, 1fr); gap: 5px; width: 62px; }
 .jog-empty { display: block; }
+/* Whether LinuxCNC applies the soft limits to a jog yet (plan WP06). */
+.jog-limits { color: var(--muted); font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
 
 /* ---- tiles ---- */
 
@@ -271,14 +412,6 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .mdi-hist { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .mdi-hist li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
 .mdi-note { font-size: 11px; margin-left: auto; }
-
-/* ---- footer ---- */
-
-.msg {
-  position: sticky; bottom: 0; background: var(--surf);
-  border-top: 1px solid var(--line); padding: 9px 20px;
-  color: var(--muted-dim); font-size: 12.5px;
-}
 
 /* ---- connection lost (app.js showLost) ----
    Covers the whole screen: the values under it are stale and must not read

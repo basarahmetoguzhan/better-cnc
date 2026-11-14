@@ -4,7 +4,7 @@ Bu dosya, cevaplanmadan ilerlenemeyecek soruların kaydıdır. Her soru
 cevaplandığında **buraya cevabı ve tarihi yazılır** — silinmez, üstü çizilir.
 Karar geçmişini burada tutuyoruz.
 
-Son güncelleme: 2026-11-12 (test tezgahında Faz 1–8: B3/B4 düzeltildi, B8–B12 eklendi; önceki: 2026-10-18 doküman temizliği + mermer makinelerinin Zhulong'da kalması kararı, bkz. B7; cevaplar 2026-08-03 ve 2026-08-05'ten)
+Son güncelleme: 2026-11-14 (arayüzün P0 işi: B13 eklendi, B12'nin denemesi docs/12'de; P0 temizliği: B13'te sayfalama kararı; önceki 2026-11-12: test tezgahında Faz 1–8: B3/B4 düzeltildi, B8–B12 eklendi; önceki: 2026-10-18 doküman temizliği + mermer makinelerinin Zhulong'da kalması kararı, bkz. B7; cevaplar 2026-08-03 ve 2026-08-05'ten)
 
 > **Not (2026-10-18):** Bu dosyadaki "Faz N" numaraları projenin ilk (mermer) planındaki
 > fazlardır — `PLAN-BUGUN.md`'deki test tezgahı Faz 1–9 ile karıştırma. B8–B12 test tezgahının
@@ -398,6 +398,58 @@ izleme olduğunu söylüyor. Kart bağlantısı koparsa giden acil stop bilerek 
 kablo kopunca yalnız `io_error` kalkıyor, LinuxCNC makineyi AÇIK tutuyor (DURUM, 2026-10-21
 denetimi). Yalnız `fake_linuxcnc` ile test edildi (`ui/tests/test_observe_and_live_hal.py`);
 makinede AXIS'in yanında henüz denenmedi.
+
+**Hâlâ bekliyor (2026-11-14):** gözlem sonucu. Deneme makinede, AXIS'in yanında:
+[12-operator-handover.md](12-operator-handover.md) "Mod A" ve PC listesinin 4–8. adımları.
+B12 bu adımlar geçince kapanır.
+
+---
+
+## 🟡 B13 — Arayüzün seçilmiş ama ölçülmemiş sabitleri
+
+**Durum:** AÇIK (2026-11-14)
+**Kim cevaplar:** Makinede, [12-operator-handover.md](12-operator-handover.md)'deki PC listesi
+**Neyi bloke ediyor:** arayüzün makineyi sürmesi değil (her sabitin yanlışlığı güvenli tarafta:
+ret ya da ikinci basış), ama kiosk `enable` kararı bu ölçümlerden sonra
+
+Her biri kodda "Chosen, not measured" yorumu ve docs/11'de yazılı. Simülatör gerçek zamanlı
+değil, step ve takip hatası yok: oradaki geçişler bunları ölçmez. Kodda adıyla bulunur
+(`grep -n AD ui/bettercnc/*.py`).
+
+| Sabit | Değer | Yer | Yanlışsa belirti | PC listesi adımı |
+|---|---|---|---|---|
+| `WAIT_TIMEOUT_S` | 0,25 s | `adapter.py` | Tekrar denenince geçen ret (`MDI moduna geçilemedi`, `MANUAL moduna geçilemedi` gibi) | 11 |
+| Acil stoptan çıkma süresi | 3 × `[EMCIO]CYCLE_TIME` = 0,3 s | `adapter.py` (`_estop_reset_deadline_s`) | `Yazılım sıfırlaması reddedildi — LinuxCNC 0.3 s içinde acil stoptan çıkmadı.` | 10, 11 |
+| `FOLLOW_UP_WINDOW_S`, `MDI_RESULT_WINDOW_S` | 2 s, 2 s | `adapter.py` | MDI geçmişinde yanlış renk, kutuda genel hata | 17 |
+| `HOMING_GAP_RECHECK_S` | 0,03 s | `adapter.py` | Home All'da eklemler arasında jog gider (`Can't jog any joint while homing.`) | 14 |
+| `MOVING_VEL_EPS` | 1e-6 mm/s | `adapter.py` | Dururken `moving` true | 5 |
+| `_MAX_ERRORS_PER_DRAIN` | 64 | `adapter.py` | — (bir boşaltmanın sınırı) | 20 |
+| `RECOVERY_STEP_MM` | 3 mm | `motionrules.py` | Kurtarma sonrası makine yine durur, kart yine çıkar | 13 |
+| `RECOVERY_INSIDE_MARGIN_MM`, `RECOVERY_MAX_STEP_MM` | 0,5 mm, 10 mm | `motionrules.py` | Referanslı eksende kurtarma reddi | 13 |
+| `UNHOMED_MAX_STEP_MM`, `UNHOMED_NO_SWITCH_MAX_MM` | 10 mm, 1 mm (Z−) | `motionrules.py` | Referanssız jog fazla kısa/uzun | 12 |
+| `AT_SOFT_LIMIT_MM`, `JOG_LIMIT_MARGIN_MM` | 0,001 mm, 0,0001 mm | `motionrules.py` | Limitte kırpılmış jog LinuxCNC'ce sessizce atılır | 16 |
+| `CONFIRM_TIMEOUT_S`, `CONFIRM_REFUSED_S`, `CONFIRM_MIN_S` | 15 s, 5 s, 1 s | `app.py` | Onay soruyu okumadan düşer / çift dokunuş onaylar | 14 |
+| `READY_MARGIN_MS` | 30 ms | `static/app.js` ([../deploy/README.md](../deploy/README.md) "Süreler") | «Evet» bir yenileme geç açılır | 14 |
+| `REQUEST_TIMEOUT_S` | 10 s | `app.py` | — | — |
+| `PAGE_SIZE`, `MAX_FILES`, `RACY_S`, `MAX_COUNT_BYTES` | 200 (sayfa), 5000 (tarama sınırı), 2 s, 32 MiB | `programs.py` | Sayfa uzun/kısa; 5000'den ötesi listelenmez; liste geç güncellenir; büyük dosyada satır sayısı yok | 18 |
+| `MAX_TEXT_BYTES`, `LINE_TEXT_MAX` | 1 MiB, 120 | `programs.py` | Satır metni görünmez / kesik | 18 |
+| `HALCMD_TIMEOUT_S`, `LINK_SETTLE_S`, `LOOP_STALL_S` | 2 s, 0,5 s, 2 s | `adapter.py` ([../deploy/README.md](../deploy/README.md) "Süreler") | Sıfırlama takılır / bağlantı yanlış "kurulamadı" / kiosk LinuxCNC'yi gereksiz yeniden başlatır | 20, 21 |
+
+Sabit olmayan, ölçülecek bir yük: **tek çekirdekte 1 Hz yoklama.** PC şimdi failsafe'te tek
+çekirdekle açılıyor (B10); servo periyodu 1 ms, failsafe'te `tmax` ~0,52 ms, Firefox'la 1,25 ms.
+Arayüzün sayfası açıkken (Program ekranında poll başına fazladan bir `os.stat`) `tmax` ve CPU
+PC listesinin 3. ve 7. adımlarında ölçülür; `tmax` 1 ms'ye yaklaşırsa kiosk'a geçilmez, plan
+WP19 (hafif yenileme) öne alınır.
+
+Ayrıca açık, ölçümle değil kararla (duraklamış bir MDI satırının arkasına yazılan MDI satırı
+artık reddediliyor, son P0 incelemesi: «Devam» onu da koştururdu): programlarda M0/M1 kullanılacak
+mı. ~~Listede en yeni 200 dosyadan ötesi yüklenemiyor (sayfalama gerekir mi?)~~ — **karar verildi
+(P0 temizliği, 2026-11-14): sayfalama.** Program listesi sayfa başına 200 dosya gösterir
+(«Önceki» / «Sonraki», `toplam N dosya`), listelenen her dosya yüklenir; tarama 5000 dosyada durur
+ve ötesini söyler. Sayfa tarayıcının görünüm durumudur, LinuxCNC'ye bir şey gitmez, observe
+modunda da çalışır.
+
+**Cevap:** _(bekliyor — PC listesi)_
 
 ---
 

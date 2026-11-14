@@ -10,6 +10,7 @@ the systemd unit and shell scripts are checked there (`sim/sim.sh lint`).
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -23,11 +24,13 @@ import threading
 import unittest
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Dict, List
 
-from helpers import REPO_ROOT
+from helpers import REPO_ROOT, ini_raw_values
 
 from bettercnc import bootpage as B
 from bettercnc.configmodel import load_config_from_ini
+from bettercnc.profiles import TEST_RIG_INPUTS
 
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 from ini_derive import derive  # noqa: E402
@@ -45,6 +48,8 @@ def _load(path: str, name: str):
 
 make_kiosk_ini = _load(os.path.join(DEPLOY, "make_kiosk_ini.py"), "make_kiosk_ini")
 make_sim_ini = _load(os.path.join(REPO_ROOT, "sim", "make_sim_ini.py"), "make_sim_ini")
+# The e2e harness imports without linuxcnc: its pure parts are checked here.
+e2e = _load(os.path.join(REPO_ROOT, "sim", "e2e", "harness.py"), "e2e_harness")
 
 
 def read(rel: str) -> str:
@@ -171,11 +176,219 @@ class TestKioskIni(unittest.TestCase):
 class TestSimIniAfterTheRefactor(unittest.TestCase):
     """sim/make_sim_ini.py moved its copying to scripts/ini_derive.py."""
 
-    def test_exactly_halfile_and_display_change(self):
+    def test_exactly_halfile_display_and_program_prefix_change(self):
         out = make_sim_ini.convert(rig_text())
         diff = changed_lines(rig_text(), out)
-        self.assertEqual([d[1] for d in diff], ["DISPLAY = axis", "HALFILE = test-rig.hal"])
+        self.assertEqual(
+            [d[1] for d in diff],
+            ["DISPLAY = axis", "PROGRAM_PREFIX = ../../nc_files/", "HALFILE = test-rig.hal"],
+        )
         self.assertIn("\n[SIM]\nLINK_STUB = ", out)
+
+    def test_program_prefix_is_the_repos_nc_files_absolute(self):
+        """The sim INI is written to /tmp/better-cnc-sim (sim/start.sh),
+        where the rig's relative ../../nc_files/ would name /nc_files."""
+        out = make_sim_ini.convert(rig_text())
+        line = next(x for x in out.splitlines() if x.startswith("PROGRAM_PREFIX = "))
+        prefix = line.split(" = ", 1)[1]
+        self.assertTrue(os.path.isabs(prefix), prefix)
+        self.assertEqual(prefix, os.path.join(REPO_ROOT, "nc_files"))
+        # the directory the rig's relative prefix names from the rig's INI
+        rig_prefix = ini_raw_values()["DISPLAY.PROGRAM_PREFIX"]
+        self.assertEqual(os.path.normpath(os.path.join(os.path.dirname(RIG_INI), rig_prefix)), prefix)
+        self.assertTrue(os.path.isfile(os.path.join(prefix, "faz8-kare.ngc")))
+
+
+# ---------------------------------------------------------------------------
+# sim/: the switch inputs under the rig's names (hm2_link_stub.py,
+# test-rig-sim.hal) and the e2e harness (sim/e2e)
+# ---------------------------------------------------------------------------
+
+
+def _hal_nets(text: str) -> Dict[str, List[str]]:
+    """{signal: [every pin token on its `net` lines]} - arrows dropped."""
+    nets: Dict[str, List[str]] = {}
+    for line in text.splitlines():
+        words = line.split("#", 1)[0].split()
+        if len(words) >= 2 and words[0] == "net":
+            nets.setdefault(words[1], []).extend(w for w in words[2:] if w not in ("=>", "<=", "<=>"))
+    return nets
+
+
+class TestSimSwitchInputs(unittest.TestCase):
+    """The UI reads the switches from hm2_7i92.0.gpio.0NN.in_not
+    (profiles.TEST_RIG_INPUTS); the sim had no such pins, so Alarmlar read
+    'okunamadı' there (sim lens, 2026-11-13)."""
+
+    def test_the_stub_makes_the_five_in_not_pins_as_hal_in_bits(self):
+        stub = read("sim/hm2_link_stub.py")
+        prefix = re.search(r'^COMPONENT = "([^"]+)"', stub, re.M).group(1)
+        made = re.findall(r'comp\.newpin\("(gpio\.\d{3}\.in_not)", hal\.HAL_BIT, hal\.HAL_IN\)', stub)
+        self.assertEqual(sorted(made), ["gpio.020.in_not", "gpio.021.in_not", "gpio.022.in_not",
+                                        "gpio.023.in_not", "gpio.024.in_not"])
+        self.assertEqual(sorted(prefix + "." + m for m in made),
+                         sorted(inp.hal_pin for inp in TEST_RIG_INPUTS))
+        # readers only: no gpio pin is made any other way
+        self.assertEqual(len(re.findall(r"gpio\.\d{3}\.in_not", stub.split("def main")[1])), 5)
+
+    def test_the_sim_hal_puts_each_on_the_rigs_signal(self):
+        """Same signal per pin as configs/test-rig/test-rig.hal nets it."""
+        sim = _hal_nets(read("sim/test-rig-sim.hal"))
+        rig = _hal_nets(read("configs/test-rig/test-rig.hal"))
+        for inp in TEST_RIG_INPUTS:
+            with self.subTest(pin=inp.pin):
+                rig_sig = [sig for sig, pins in rig.items()
+                           if "hm2_[HOSTMOT2](BOARD).0.{}.in_not".format(inp.pin) in pins]
+                sim_sig = [sig for sig, pins in sim.items() if inp.hal_pin in pins]
+                self.assertEqual(len(rig_sig), 1, rig_sig)
+                self.assertEqual(sim_sig, rig_sig)
+
+    def test_each_switch_signal_keeps_one_writer_the_simulated_switch(self):
+        sim = _hal_nets(read("sim/test-rig-sim.hal"))
+        for name, sw in e2e.SWITCHES.items():
+            with self.subTest(switch=name):
+                sig = [s for s, pins in sim.items() if "hm2_7i92.0.{}.in_not".format(sw.gpio) in pins]
+                self.assertEqual(len(sig), 1, sig)
+                writers = [p for p in sim[sig[0]] if p.endswith(".home-sw")]
+                self.assertEqual(writers, ["sim-{}.home-sw".format(name)])
+
+
+class TestE2EHarnessTables(unittest.TestCase):
+    """sim/e2e/harness.py's tables, tied to the files they mirror."""
+
+    def test_switches_match_the_profile_and_the_sim_hal(self):
+        by_pin = {inp.pin: inp for inp in TEST_RIG_INPUTS}
+        self.assertEqual(sorted(sw.gpio for sw in e2e.SWITCHES.values()), sorted(by_pin))
+        for name, sw in e2e.SWITCHES.items():
+            with self.subTest(switch=name):
+                inp = by_pin[sw.gpio]
+                self.assertEqual((sw.label, sw.axis, sw.end), (inp.label, inp.axis, inp.end))
+                self.assertEqual(sw.joint, "XYZ".index(sw.axis))
+        self.assertEqual(sorted(e2e.END_TO_SWITCH), ["X+", "X-", "Y+", "Y-", "Z+"])
+
+    def test_default_positions_come_from_the_sim_hal_on_their_side(self):
+        """A min switch sits below motor 0, a max (and Z's top) above:
+        sim_home_switch picks the side from home-pos's sign."""
+        defaults = e2e.default_switch_positions()
+        self.assertEqual(defaults, {"x-min": -10.0, "x-max": 392.82, "y-min": -10.0,
+                                    "y-max": 380.78, "z-top": 5.0})
+        for name, pos in defaults.items():
+            self.assertEqual(e2e.switch_side(pos), 1 if e2e.SWITCHES[name].end == "+" else -1, name)
+        with self.assertRaises(e2e.SwitchError):
+            e2e.default_switch_positions("setp sim-x-min.home-pos -10\n")
+
+    def test_home_and_soft_limits_match_the_ini(self):
+        ini = ini_raw_values()
+        for i, axis in enumerate("XYZ"):
+            with self.subTest(axis=axis):
+                self.assertEqual(e2e.HOME_POSITION[i], float(ini["JOINT_{}.HOME".format(i)]))
+                self.assertEqual(e2e.SOFT_LIMITS[axis], (float(ini["AXIS_{}.MIN_LIMIT".format(axis)]),
+                                                         float(ini["AXIS_{}.MAX_LIMIT".format(axis)])))
+
+
+class TestE2EHarnessSwitchRules(unittest.TestCase):
+    """The pure rules of place_switch and press (no HAL)."""
+
+    D = {"x-min": -10.0, "x-max": 392.82, "y-min": -10.0, "y-max": 380.78, "z-top": 5.0}
+
+    def test_a_switch_is_never_moved_across_motor_0(self):
+        self.assertEqual(e2e.check_placement("x-min", -2.0, self.D), -2.0)
+        self.assertEqual(e2e.check_placement("x-max", 0.0, self.D), 0.0)   # 0 is the + side
+        for name, pos in (("x-min", 0.0), ("x-min", 3.0), ("z-top", -0.1), ("y-max", -5.0)):
+            with self.subTest(name=name, pos=pos), self.assertRaises(e2e.SwitchError) as ctx:
+                e2e.check_placement(name, pos, self.D)
+            self.assertIn("işaret", str(ctx.exception))
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(e2e.SwitchError):
+                e2e.check_placement("x-min", bad, self.D)
+        with self.assertRaises(e2e.SwitchError):
+            e2e.check_placement("z-bottom", -1.0, self.D)
+
+    def test_press_puts_the_trip_point_behind_the_axis_on_the_switchs_side(self):
+        depth = e2e.PRESS_DEPTH_MM
+        self.assertEqual(e2e.press_position("x-max", 40.1, self.D), 40.1 - depth)
+        self.assertEqual(e2e.press_position("z-top", 0.0, self.D), 0.0)     # fresh start: at 0
+        self.assertEqual(e2e.press_position("z-top", 0.2, self.D), 0.0)     # 0 is closer
+        self.assertEqual(e2e.press_position("x-min", -4.9, self.D), -4.9 + depth)
+        self.assertEqual(e2e.press_position("x-min", -0.2, self.D), -0.1)   # stays below 0
+        for name, cur in (("z-top", -0.1), ("x-max", -4.9), ("x-min", 0.0), ("y-min", 43.7)):
+            with self.subTest(name=name, cur=cur), self.assertRaises(e2e.SwitchError) as ctx:
+                e2e.press_position(name, cur, self.D)
+            self.assertIn("burada basılamaz", str(ctx.exception))
+
+    def test_press_never_yields_a_position_check_placement_refuses(self):
+        for name in self.D:
+            for cur in (-50.0, -4.9, -0.3, -0.01, 0.0, 0.01, 0.3, 4.9, 50.0):
+                try:
+                    pos = e2e.press_position(name, cur, self.D)
+                except e2e.SwitchError:
+                    continue
+                with self.subTest(name=name, cur=cur):
+                    e2e.check_placement(name, pos, self.D)
+                    side = e2e.switch_side(self.D[name])
+                    # pressed where it stands: at or past the trip point
+                    self.assertTrue(cur >= pos if side > 0 else cur <= pos, (cur, pos))
+
+    def test_cli_refuses_without_touching_hal(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(e2e.main([]), 2)
+            self.assertEqual(e2e.main(["press"]), 2)
+            self.assertEqual(e2e.main(["bogus"]), 2)
+            self.assertEqual(e2e.main(["press", "Z-"]), 1)   # no Z bottom switch
+            self.assertEqual(e2e.main(["release", "W+"]), 1)
+        self.assertIn("Z'nin alt switch'i yok", err.getvalue())
+
+
+class TestE2ERunner(unittest.TestCase):
+    """make sim-e2e: sim/e2e/run.sh. The rules it must keep, as text (it
+    runs Docker, so its behaviour is checked by running it)."""
+
+    def test_its_own_container_name_and_port_never_an_inherited_one(self):
+        run = read("sim/e2e/run.sh")
+        self.assertIn('export SIM_NAME="${E2E_SIM_NAME:-better-cnc-e2e}"', run)
+        self.assertIn('export SIM_PORT="${E2E_SIM_PORT:-8771}"', run)
+        self.assertNotIn("${SIM_NAME:-", run)
+        self.assertIn("""trap '"$SIM" down >/dev/null 2>&1 || true' EXIT""", run)
+
+    def test_a_fresh_linuxcnc_per_module_tests_run_inside(self):
+        run = read("sim/e2e/run.sh")
+        loop = run[run.index('for m in "${modules[@]}"'):]
+        self.assertLess(loop.index('"$SIM" down'), loop.index('"$SIM" up'))
+        self.assertIn("docker exec -e PYTHONDONTWRITEBYTECODE=1", loop)
+        self.assertIn("python3 -m unittest discover -s /repo/sim/e2e -p", loop)
+        self.assertTrue(os.access(os.path.join(REPO_ROOT, "sim", "e2e", "run.sh"), os.X_OK))
+
+    def test_make_target_lint_and_sim_sh_reach_it(self):
+        self.assertIn("sim-e2e:", read("Makefile"))
+        self.assertIn("\tsim/e2e/run.sh $(E2E)", read("Makefile"))
+        sim = read("sim/sim.sh")
+        self.assertIn("shellcheck -x sim/*.sh sim/e2e/*.sh ", sim)
+        self.assertIn("python3 /repo/sim/e2e/harness.py \"$cmd\" \"$@\"", sim)
+        for cmd in ("press", "release", "switches"):
+            self.assertIn("#   sim/sim.sh {}".format(cmd), sim)
+
+    def test_the_harness_never_opens_a_command_or_error_channel(self):
+        """It commands through the UI only, and an error read from the
+        queue would be gone for the UI's drain (harness docstring): no
+        call to command() or error_channel() in any sim/e2e module."""
+        e2e_dir = os.path.join(REPO_ROOT, "sim", "e2e")
+        modules = sorted(n for n in os.listdir(e2e_dir) if n.endswith(".py"))
+        self.assertIn("harness.py", modules)
+        for name in modules:
+            with self.subTest(file=name):
+                tree = ast.parse(read(os.path.join("sim", "e2e", name)))
+                called = {
+                    getattr(node.func, "attr", getattr(node.func, "id", None))
+                    for node in ast.walk(tree) if isinstance(node, ast.Call)
+                }
+                self.assertFalse(called & {"command", "error_channel"}, name)
+
+    def test_the_harness_imports_without_linuxcnc(self):
+        """Loaded above with no linuxcnc module (on the Mac), so the
+        import stays inside _lc()."""
+        self.assertIsNone(re.search(r"^(import|from)\s+(linuxcnc|hal)\b",
+                                    read("sim/e2e/harness.py"), re.M))
 
 
 # ---------------------------------------------------------------------------

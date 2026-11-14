@@ -7,10 +7,12 @@ import http.client
 import inspect
 import json
 import math
+import os
 import re
 import socket
 import textwrap
 import threading
+import types
 import unittest
 import urllib.error
 import urllib.parse
@@ -23,6 +25,7 @@ from bettercnc import render as R
 from bettercnc import viewmodel as VM
 from bettercnc.adapter import LinuxCncAdapter, MockAdapter
 from bettercnc.app import (
+    CONFIRM_MIN_S,
     MAX_ACTION_BODY,
     REQUEST_TIMEOUT_S,
     Handler,
@@ -138,9 +141,11 @@ class TestSession(unittest.TestCase):
         _session_with(NoSuchAxis()).act("jog", "Q:1")
 
 
-def _session_with(adapter, profile_key="test-rig"):
+def _session_with(adapter, profile_key="test-rig", clock=None):
     profile = load_profile(profile_key)
-    return Session(adapter, profile, load_machine_config(profile))
+    if clock is None:
+        return Session(adapter, profile, load_machine_config(profile))
+    return Session(adapter, profile, load_machine_config(profile), clock=clock)
 
 
 class _LockProbe(object):
@@ -161,8 +166,11 @@ class _LockProbe(object):
     def software_estop_reset(self):
         self._record("software_estop_reset")
 
-    def home_all(self):
+    def home_all(self, confirmed=False):
         self._record("home_all")
+
+    def home_joint(self, axis, confirmed=False):
+        self._record("home_joint")
 
     def jog(self, axis, direction):
         self._record("jog")
@@ -173,8 +181,23 @@ class _LockProbe(object):
     def program_start(self):
         self._record("program_start")
 
-    def program_stop(self):
-        self._record("program_stop")
+    def program_pause(self):
+        self._record("program_pause")
+
+    def program_resume(self):
+        self._record("program_resume")
+
+    def program_step(self):
+        self._record("program_step")
+
+    def recover_limit(self):
+        self._record("recover_limit")
+
+    def stop_motion(self):
+        self._record("stop_motion")
+
+    def stop_followup(self):
+        self._record("stop_followup")
 
     def set_jog_step(self, mm):
         self._record("set_jog_step")
@@ -184,6 +207,22 @@ class _LockProbe(object):
 
     def set_wcs(self, wcs):
         self._record("set_wcs")
+
+    def load_program(self, path):
+        self._record("load_program")
+
+    def refuse(self, text):
+        self._record("refuse")
+
+    def snapshot(self):
+        """Not recorded: «Yeniden yükle» reads the loaded file from it
+        (Session._reload) before it loads - here the rig's program."""
+        cfg = load_machine_config(load_profile("test-rig"))
+        return types.SimpleNamespace(
+            program_file=os.path.join(cfg.program_dir, "faz8-kare.ngc"))
+
+    def ack_error(self, error_id):
+        self._record("ack_error")
 
 
 class _BlockingJog(object):
@@ -209,25 +248,52 @@ class _BlockingJog(object):
 
 class TestSessionLocking(unittest.TestCase):
     """Session.act serialises adapter calls under one lock - except the
-    software estop. On the test rig the GUI button is the only estop
-    (configs/test-rig/test-rig.hal, "ESTOP CHAIN - GUI ONLY. THERE IS NO
-    HARDWARE ESTOP INPUT."), so it must not queue behind an action that is
-    blocked inside the adapter."""
+    software estop and DURDUR's first abort. On the test rig the GUI button
+    is the only estop (configs/test-rig/test-rig.hal, "ESTOP CHAIN - GUI
+    ONLY. THERE IS NO HARDWARE ESTOP INPUT."), so it must not queue behind
+    an action that is blocked inside the adapter; DURDUR neither (plan
+    WP03)."""
 
     #: Every action Session.act dispatches under the lock, a value it accepts,
     #: and the adapter method it must reach.
     LOCKED = (
         ("software_reset", "", "software_estop_reset"),
         ("home_all", "", "home_all"),
+        # Plan WP07: one axis homed alone.
+        ("home_joint", "Z", "home_joint"),
         ("jog", "X:1", "jog"),
         ("mdi", "G0 X1", "send_mdi"),
         ("mdi_preset", "G0 X0 Y0", "send_mdi"),
         ("program_start", "", "program_start"),
-        ("program_stop", "", "program_stop"),
+        # Plan WP09: «Duraklat», «Devam», «Adım».
+        ("program_pause", "", "program_pause"),
+        ("program_resume", "", "program_resume"),
+        ("program_step", "", "program_step"),
+        # Plan WP05: «Limitten kurtar» - override, ON, one jog off the switch.
+        ("recover_limit", "", "recover_limit"),
         ("jog_step", "0.1", "set_jog_step"),
         ("feed", "100", "set_feed_override"),
         ("wcs", "G55", "set_wcs"),
+        # Plan WP04: «Tamam» on the error box, local (no LinuxCNC command),
+        # handled before observer mode's drop - but under the lock too.
+        ("ack_error", "3", "ack_error"),
+        # Plan WP08: «Yükle» with a listed name (nc_files/ holds it), and
+        # «Yeniden yükle» of the loaded one; a name not listed is refused.
+        ("load_program", "faz8-kare.ngc", "load_program"),
+        ("reload_program", "", "load_program"),
     )
+    #: Plan WP08: «Listeyi yenile» ends only the list's cache, under the
+    #: lock, and reaches no adapter.
+    SESSION_ONLY = ("refresh_programs",)
+    #: DURDUR: the stop rail and Esc ("stop") and the Program screen's
+    #: «Durdur» ("program_stop", which until plan WP03 was a locked
+    #: program_stop() of its own): the first half without the lock, the
+    #: second under it.
+    STOPS = ("stop", "program_stop")
+    #: Plan WP07: the confirmation band's «Evet» (its token as the value)
+    #: and «Vazgeç», under the lock: «Evet» reaches the adapter only with
+    #: a question standing (test_the_answer_runs_under_the_lock).
+    CONFIRMATION = ("confirm", "cancel_confirm")
 
     def test_software_estop_does_not_wait_behind_a_blocked_jog(self):
         adapter = _BlockingJog()
@@ -253,6 +319,54 @@ class TestSessionLocking(unittest.TestCase):
         self.assertEqual(adapter.events, ["jog:start", "estop", "jog:end"])
         self.assertFalse(sess._lock.locked())
 
+    def test_the_estops_answer_does_not_wait_for_the_lock_either(self):
+        """P0 cleanup item 14 (docs/11 Known gaps): the page answering an
+        estop waited for the action holding the lock. Now the answer comes
+        at once with no page ("html": null) while one does; app.js keeps the
+        rail's band until the next poll renders. With the lock free the
+        answer renders as before."""
+        mock = MockAdapter(load_profile("test-rig"))
+        blocking = _BlockingJog()
+        mock.jog = blocking.jog
+        sess = _session_with(mock)
+        old = getattr(Handler, "session", None)
+        Handler.session = sess
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server.start()
+
+        def done():
+            blocking.release_jog.set()
+            httpd.shutdown()
+            httpd.server_close()
+            server.join(WAIT_S)
+            Handler.session = old
+        self.addCleanup(done)
+
+        def post(action):
+            req = urllib.request.Request(
+                "http://127.0.0.1:{}/api/action".format(httpd.server_address[1]),
+                data=json.dumps({"action": action, "value": "", "screen": "kontrol"}).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=WAIT_S) as r:
+                return json.loads(r.read().decode("utf-8"))
+
+        free = post("software_estop")
+        self.assertIn("ACİL STOP", free["html"])
+        jog = threading.Thread(target=sess.act, args=("jog", "X:1"), daemon=True)
+        jog.start()
+        self.addCleanup(jog.join, WAIT_S)
+        self.addCleanup(blocking.release_jog.set)       # runs first: release, then join
+        self.assertTrue(blocking.jog_entered.wait(WAIT_S))
+        answer = post("software_estop")
+        self.assertEqual((answer["html"], answer.get("pending")), (None, True))
+        self.assertTrue(sess._lock.locked(), "answered while the jog still holds the lock")
+        self.assertFalse(blocking.release_jog.is_set())
+        with open(os.path.join(os.path.dirname(R.__file__), "static", "app.js"),
+                  encoding="utf-8") as fh:
+            js = fh.read()
+        self.assertIn("if (!data || !data.html) return;", js)    # swap leaves the page
+
     def test_software_estop_is_called_without_the_lock(self):
         probe = _LockProbe()
         probe.session = _session_with(probe)
@@ -267,6 +381,15 @@ class TestSessionLocking(unittest.TestCase):
                 probe.session.act(action, value)
                 self.assertEqual(probe.calls, [(method, True)])
                 self.assertFalse(probe.session._lock.locked())  # released after
+
+    def test_durdur_aborts_without_the_lock_then_follows_up_under_it(self):
+        for action in self.STOPS:
+            with self.subTest(action=action):
+                probe = _LockProbe()
+                probe.session = _session_with(probe)
+                probe.session.act(action, "")
+                self.assertEqual(probe.calls, [("stop_motion", False), ("stop_followup", True)])
+                self.assertFalse(probe.session._lock.locked())
 
     def test_the_action_list_above_is_every_action_session_act_knows(self):
         """Read the action names out of Session.act's source, so an action
@@ -287,7 +410,29 @@ class TestSessionLocking(unittest.TestCase):
                         if isinstance(e, ast.Constant) and isinstance(e.value, str)
                     )
         self.assertIn("software_estop", names)  # the parse found something real
-        self.assertEqual(names, {a for a, _, _ in self.LOCKED} | {"software_estop"})
+        self.assertEqual(names, {a for a, _, _ in self.LOCKED} | {"software_estop"}
+                         | set(self.STOPS) | set(self.CONFIRMATION) | set(self.SESSION_ONLY))
+
+    def test_the_answer_runs_under_the_lock(self):
+        """«Evet» runs the action asked about, confirmed, under the lock;
+        «Vazgeç» reaches nothing and leaves the lock free."""
+        for action, value, method in (("home_all", "", "home_all"),
+                                      ("home_joint", "Y", "home_joint")):
+            with self.subTest(action=action):
+                probe = _LockProbe()
+                now = [100.0]
+                probe.session = _session_with(probe, clock=lambda: now[0])
+                token = probe.session.request_confirm(action, value, "?")
+                now[0] += CONFIRM_MIN_S      # «Evet» counts by now
+                probe.session.act("confirm", token)
+                self.assertEqual(probe.calls, [(method, True)])
+                self.assertFalse(probe.session._lock.locked())
+        probe = _LockProbe()
+        probe.session = _session_with(probe)
+        probe.session.request_confirm("home_all", "", "?")
+        probe.session.act("cancel_confirm", "")
+        self.assertEqual(probe.calls, [])
+        self.assertFalse(probe.session._lock.locked())
 
 
 class TestSessionActNotes(unittest.TestCase):
@@ -307,24 +452,26 @@ class TestSessionActNotes(unittest.TestCase):
         self.assertGreater(A.WAIT_TIMEOUT_S, 0)
         self.assertLess(A.WAIT_TIMEOUT_S, 5.0)
 
-    def test_load_program_exists_on_both_adapters_but_no_action_calls_it(self):
-        """When load_program gets an action this fails, and the "Not wired
-        yet" note has to go with it."""
+    def test_load_program_is_wired_and_its_note_says_how(self):
+        """Plan WP08 wired load_program: Session.act reaches it (through
+        _load) and the refusal path (adapter.refuse), and the docstring
+        says that only a listed name gives a path. The old "Not wired yet"
+        note is gone with it."""
         for cls in (MockAdapter, LinuxCncAdapter):
             self.assertTrue(callable(getattr(cls, "load_program", None)), cls.__name__)
-        tree = ast.parse(textwrap.dedent(inspect.getsource(Session.act)))
+        tree = ast.parse(textwrap.dedent(inspect.getsource(Session._load)))
         called = {
             n.func.attr for n in ast.walk(tree)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
         }
-        self.assertIn("home_all", called)  # the walk does see adapter calls
-        self.assertNotIn("load_program", called)
-        self.assertIn("Not wired yet: load_program", self.doc())
+        self.assertTrue({"load_program", "refuse", "resolve"} <= called)
+        self.assertNotIn("Not wired yet", self.doc())
+        self.assertIn("programs.resolve", self.doc())
         profile = load_profile("test-rig")
         program = VM.program_screen(
             profile, load_machine_config(profile), MockAdapter(profile).snapshot()
         )
-        self.assertEqual(program["files"], [])
+        self.assertIn("faz8-kare.ngc", [f["name"] for f in program["files"]])
 
 
 class _FixedSnapshot(object):
@@ -520,6 +667,27 @@ class TestHttpRoutes(unittest.TestCase):
         status, raw = self.raw_post(str(len(body)), body)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw.decode("utf-8"))["screen"], "kontrol")
+
+    def test_a_lone_surrogate_in_a_value_does_not_break_later_answers(self):
+        """Review of plan WP07, fixed in the final P0 review: a hand-made
+        body whose mdi or wcs value carries "\\ud800" was stored (MDI
+        history, the message, the WCS) and every later answer - this POST's,
+        the page, /api/state - raised UnicodeEncodeError, so the screen
+        stayed covered until a restart. do_POST now turns it into U+FFFD."""
+        for action, value in (("mdi", "G0 X1\ud800"), ("wcs", "\ud800G55"),
+                              ("load_program", "\udc80.ngc")):
+            with self.subTest(action=action):
+                body = json.dumps({"action": action, "value": value}).encode("ascii")
+                self.assertIn(b"\\ud", body)  # the escape itself goes over the wire
+                status, raw = self.raw_post(str(len(body)), body)
+                self.assertEqual(status, 200)
+                self.assertIn("html", json.loads(raw.decode("utf-8")))
+                for path in ("/", "/api/state?screen=kontrol", "/api/render?screen=program"):
+                    status, _ = self.get(path)
+                    self.assertEqual(status, 200)
+        _, body = self.get("/api/state?screen=kontrol")
+        self.assertIn("G0 X1\ufffd", body)
+        self.post("/api/action", {"action": "wcs", "value": "G54"})
 
     def test_garbage_requests_change_nothing_and_the_server_keeps_answering(self):
         before = Handler.session.adapter.snapshot()

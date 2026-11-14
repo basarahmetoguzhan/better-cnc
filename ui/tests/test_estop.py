@@ -130,7 +130,7 @@ class TestAdapterEnforcement(unittest.TestCase):
         actions = [
             ("software_reset", ""), ("software_estop", ""), ("home_all", ""),
             ("jog", "X:1"), ("mdi", "G0 X1"), ("mdi_preset", "G0 Z5"),
-            ("program_start", ""), ("program_stop", ""), ("jog_step", "10"),
+            ("program_start", ""), ("program_stop", ""), ("stop", ""), ("jog_step", "10"),
             ("feed", "150"), ("wcs", "G55"), ("bogus", "whatever"),
         ]
         for action, value in actions:

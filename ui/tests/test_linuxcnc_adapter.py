@@ -42,6 +42,7 @@ from helpers import REPO_ROOT, rig_profile
 
 import fake_linuxcnc as F
 from bettercnc import adapter as A
+from bettercnc import programs
 from bettercnc import render as R
 from bettercnc import viewmodel as VM
 from bettercnc.adapter import LinuxCncAdapter, MockAdapter
@@ -210,6 +211,48 @@ class TestFakeInstallation(unittest.TestCase):
                     sys.modules.pop(name, None)
                 else:
                     sys.modules[name] = previous  # type: ignore[assignment]
+
+    def test_stat_offers_every_listed_attribute_before_and_after_poll(self):
+        """Zero-filled before the first poll (emcmodule.cc:258-271), copied
+        in by it (:306-310): either way, every STAT_ATTRIBUTES name reads."""
+        with F.installed() as (lc, _, _, _):
+            s = lc.stat()
+            for when in ("before poll", "after poll"):
+                for name in F.STAT_ATTRIBUTES:
+                    with self.subTest(when=when, attribute=name):
+                        getattr(s, name)
+                s.poll()
+            self.assertEqual(len(s.gcodes), F.ACTIVE_G_CODES)
+
+    def test_passive_status_reaches_stat_only_on_poll(self):
+        """The plan-WP02 fields: a test sets them on the machine, stat
+        reports them at the next poll - the joint flags only for configured
+        joints (taskintf.cc:926, :959-963)."""
+        machine = F.FakeMachine()
+        with F.installed(machine=machine) as (lc, _, m, _):
+            s = lc.stat()
+            s.poll()
+            m.hard_min[0] = 1
+            m.hard_max[2] = 1
+            m.hard_min[5] = 1                # beyond [KINS]JOINTS = 3
+            m.override_mask = 1 << 0
+            m.current_vel = 2.5
+            m.motion_line, m.current_line = 8, 13
+            m.g92_offset[0] = 10.0
+            m.tool_offset[2] = 12.5
+            m.rotation_xy = 30.0
+            m.commanded_pos = [1.0] + [0.0] * 8
+            self.assertEqual(s.joint[0]["min_hard_limit"], 0)   # not polled yet
+            self.assertEqual(s.current_vel, 0.0)
+            s.poll()
+        self.assertEqual([(d["min_hard_limit"], d["max_hard_limit"], d["override_limits"])
+                          for d in s.joint[:6]],
+                         [(1, 0, 1), (0, 0, 1), (0, 1, 1), (0, 0, 0), (0, 0, 0), (0, 0, 0)])
+        self.assertEqual((s.current_vel, s.motion_line, s.current_line), (2.5, 8, 13))
+        self.assertEqual((s.g92_offset[0], s.tool_offset[2], s.rotation_xy), (10.0, 12.5, 30.0))
+        self.assertEqual(s.position[0], 1.0)
+        self.assertEqual(s.actual_position[0], 0.0)
+        self.assertEqual(s.gcodes, F.SIM_STARTUP_GCODES)
 
     def test_axis_jog_in_free_mode_reports_the_joint_range_message(self):
         """The old adapter's jog, replayed against the fake: an axis jog in
@@ -477,6 +520,40 @@ class TestFakeFidelity(unittest.TestCase):
             with self.subTest(attribute=name):
                 self.assertIn(name, real)
 
+    #: The stat fields plan WP02 added to the fake: each must stay listed,
+    #: and so checked against the binding by the test above.
+    STATE_PLUMBING_ATTRIBUTES = (
+        "position", "current_vel", "motion_line", "current_line", "g92_offset",
+        "tool_offset", "rotation_xy", "gcodes",
+    )
+
+    @NEEDS_REFERENCE
+    def test_the_state_plumbing_attributes_are_in_the_binding(self):
+        text = _src(self.EMCMODULE)
+        real = set(re.findall(r'\{\(char\*\)"(\w+)",\s*(?:T_\w+|\(getter\))', text))
+        for name in self.STATE_PLUMBING_ATTRIBUTES:
+            with self.subTest(attribute=name):
+                self.assertIn(name, F.STAT_ATTRIBUTES)
+                self.assertIn(name, real)
+
+    @NEEDS_REFERENCE
+    def test_adapter_docstring_cites_the_binding_line_of_each_stat_field(self):
+        """The adapter module docstring gives emcmodule.cc:N for each stat
+        field; line N must define it: the member or getter for stat.NAME,
+        the dict entry for stat.joint[n]["KEY"]. Unlike most citations in
+        this suite, these line numbers are checked."""
+        lines = _src(self.EMCMODULE).split("\n")
+        rows = re.findall(
+            r'stat\.(\w+)(?:\[n\]\["(\w+)"\])?\s+\(?emcmodule\.cc:(\d+)', A.__doc__)
+        self.assertGreaterEqual(len(rows), 25)
+        for name, key, line in rows:
+            with self.subTest(field=name, key=key, line=line):
+                text = lines[int(line) - 1]
+                if key:
+                    self.assertRegex(text, r'\bF2\("{0}",|\bF\({0}\);'.format(re.escape(key)))
+                else:
+                    self.assertIn('{{(char*)"{}",'.format(name), text)
+
     @NEEDS_REFERENCE
     def test_joint_dict_keys_match_stat_joint_one(self):
         text = _src(self.EMCMODULE)
@@ -557,6 +634,13 @@ class TestFakeFidelity(unittest.TestCase):
         ("emc/motion/command.c", "must be in joint mode to home", "must be in joint mode to home"),
         ("emc/motion/command.c", "Can't jog joint when not enabled.", "Can't jog joint when not enabled."),
         ("emc/motion/command.c", "Can't jog any joint while homing.", "Can't jog any joint while homing."),
+        # Plan WP05: motion's own refusal of a joint jog onto a pressed
+        # switch (joint_jog_ok) and its limit trip (check_for_faults).
+        ("emc/motion/command.c", "Can't jog joint %d further past max hard limit.",
+         "Can't jog joint {} further past max hard limit."),
+        ("emc/motion/command.c", "Can't jog joint %d further past min hard limit.",
+         "Can't jog joint {} further past min hard limit."),
+        ("emc/motion/control.c", "joint %d on limit switch error", "joint {} on limit switch error"),
         ("emc/motion/command.c", '"Joint jog requested for undefined joint number=%d (min=0,max=%d)",',
          '"Joint jog requested for undefined joint number={} (min=0,max={})".format('),
         ("emc/motion/motion.c", "all joints must be homed before going into teleop mode",
@@ -568,8 +652,16 @@ class TestFakeFidelity(unittest.TestCase):
          "can't do that ({}:{}) in manual mode"),
         ("emc/task/emctaskmain.cc", "can't do that (%s) in auto mode with the interpreter idle",
          "can't do that ({}) in auto mode with the interpreter idle"),
+        # Plan WP09: one text for the three busy interpreter states, the
+        # state's word filled in from _plan's table.
         ("emc/task/emctaskmain.cc", "can't do that (%s) in auto mode with the interpreter reading",
-         "can't do that ({}) in auto mode with the interpreter reading"),
+         '(_AUTO_READING_OK, "reading")'),
+        ("emc/task/emctaskmain.cc", "can't do that (%s) in auto mode with the interpreter paused",
+         '(_AUTO_PAUSED_OK, "paused")'),
+        ("emc/task/emctaskmain.cc", "can't do that (%s) in auto mode with the interpreter waiting",
+         '(_AUTO_WAITING_OK, "waiting")'),
+        ("emc/task/emctaskmain.cc", "can't do that (%s) in auto mode with the interpreter idle",
+         "can't do that ({}) in auto mode with the interpreter {}"),
         ("emc/task/emctaskmain.cc", "can't do that (%s:%d) in MDI mode", "can't do that ({}:{}) in MDI mode"),
         ("emc/task/emctaskmain.cc", "Can't switch mode while mode is AUTO and interpreter is not IDLE",
          "Can't switch mode while mode is AUTO and interpreter is not IDLE"),
@@ -622,6 +714,550 @@ class TestFakeFidelity(unittest.TestCase):
         self.assertIn("return;", text[range_check:printed].split("}")[0])
 
 
+class TestAbortFidelity(unittest.TestCase):
+    """DURDUR (plan WP03): what the fake's abort() does
+    (FakeMachine.issue_abort) and what LinuxCncAdapter.stop_motion and
+    stop_followup rely on, against reference/linuxcnc. Content, not line
+    numbers."""
+
+    @staticmethod
+    def between(text: str, start: str, end: str) -> str:
+        i = text.index(start)
+        return text[i:text.index(end, i)]
+
+    @NEEDS_REFERENCE
+    def test_task_takes_abort_in_every_state_and_mode(self):
+        """emcTaskPlan lists EMC_TASK_ABORT_TYPE in all seven branches - out
+        of ON; ON with MANUAL; AUTO idle, reading, paused, waiting; MDI -
+        and the fake accepts it in every branch it models."""
+        plan = self.between(_src("emc/task/emctaskmain.cc"), "static int emcTaskPlan(void)",
+                            "static int emcTaskCheckPreconditions(")
+        self.assertEqual(plan.count("case EMC_TASK_ABORT_TYPE:"), 7)
+        for table in (F._NOT_ON_OK, F._MANUAL_OK, F._AUTO_IDLE_OK, F._AUTO_READING_OK, F._MDI_OK):
+            self.assertIn("EMC_TASK_ABORT", table)
+
+    @NEEDS_REFERENCE
+    def test_abort_idles_the_interpreter_and_aborts_motion(self):
+        issue = self.between(_src("emc/task/emctaskmain.cc"), "case EMC_TASK_ABORT_TYPE:\n\t// abort",
+                             "break;")
+        self.assertIn("emcTaskAbort();", issue)
+        self.assertIn("emcMotionAbort();", issue)
+        # emcMotionAbort twice per abort - emcTaskAbort's and this one -
+        # which is what catches the next joint of a Home All
+        # (FakeMachine.issue_abort).
+        self.assertLess(issue.index("emcTaskAbort();"), issue.index("emcMotionAbort();"))
+        task_abort = self.between(_src("emc/task/emctask.cc"), "int emcTaskAbort()", "\n}\n")
+        self.assertIn("emcMotionAbort();", task_abort)
+        self.assertIn("emcStatus->task.interpState = EMC_TASK_INTERP_IDLE;", task_abort)
+        self.assertIn("emcStatus->task.task_paused = 0;", task_abort)
+        motion_abort = self.between(_src("emc/task/taskintf.cc"), "int emcMotionAbort()", "\n}\n")
+        self.assertIn("emcJogAbort(t)", motion_abort)
+        self.assertIn("emcTrajAbort();", motion_abort)
+        self.assertIn("emcmotCommand.command = EMCMOT_ABORT;",
+                      self.between(_src("emc/task/taskintf.cc"), "int emcTrajAbort()", "\n}\n"))
+
+    @NEEDS_REFERENCE
+    def test_motion_abort_ends_jogs_and_cancels_homing_in_free_mode(self):
+        """EMCMOT_ABORT by mode: teleop jogs, the coordinated planner, and in
+        free mode every joint planner and its homing; EMCMOT_JOG_ABORT, sent
+        per joint first, cancels homing as well."""
+        text = _src("emc/motion/command.c")
+        abort = self.between(text, "case EMCMOT_ABORT:", "case EMCMOT_JOG_ABORT:")
+        teleop = abort.index("if (GET_MOTION_TELEOP_FLAG()) {")
+        coord = abort.index("} else if (GET_MOTION_COORD_FLAG()) {")
+        free = abort.index("} else {", coord)
+        self.assertIn("axis_jog_abort_all(0);", abort[teleop:coord])
+        self.assertIn("tpAbort(&emcmotInternal->coord_tp);", abort[coord:free])
+        self.assertIn("joint->free_tp.enable = 0;", abort[free:])
+        self.assertIn("do_cancel_homing(joint_num);", abort[free:])
+        jog_abort = self.between(text, "case EMCMOT_JOG_ABORT:", "case EMCMOT_FREE:")
+        self.assertIn("do_cancel_homing(joint_num);", jog_abort)
+        # Only a joint homing at that instant is cancelled; one of a Home
+        # All still waiting for its turn is not (FakeMachine.issue_abort).
+        idle = re.compile(r"if \( ?! ?get_home_is_idle\(joint_num\) ?\) \{\s*"
+                          r"(/\*[^*]*\*/\s*)?do_cancel_homing\(joint_num\);")
+        self.assertRegex(abort[free:], idle)
+        self.assertRegex(jog_abort, idle)
+
+    @NEEDS_REFERENCE
+    def test_a_cancelled_homing_leaves_the_joint_unhomed_and_a_finished_one_homed(self):
+        text = _src("emc/motion/homing.c")
+        aborted = self.between(text, "case HOME_ABORT:", "break;")
+        self.assertIn("H[joint_num].homing = 0;", aborted)
+        self.assertIn("H[joint_num].homed = 0;", aborted)
+        finished = self.between(text, "case HOME_FINISHED:", "break;")
+        self.assertIn("H[joint_num].homed = 1;", finished)
+        self.assertIn("H[joint_num].joint_in_sequence = 0;", finished)
+        cancel = self.between(text, "static void base_do_cancel_homing(int jno) {", "\n}\n")
+        self.assertIn("if (H[jno].homing) {", cancel)
+        self.assertIn("}else if(H[jno].joint_in_sequence){", cancel)
+        # Why one abort still ends the rig's whole Home All
+        # (FakeMachine.issue_abort): once the cancelled joint is idle the
+        # sequence starts the next step's joints, and a joint's first move
+        # waits HOME_DELAY (0.1 s) - long enough for a later cancel point
+        # of the same abort.
+        wait = self.between(text, "case HOME_SEQUENCE_WAIT_JOINTS:", "default:")
+        self.assertIn("if(H[i].home_state != HOME_IDLE) {", wait)
+        self.assertIn("current_sequence++;", wait)
+        self.assertIn("sequence_state = HOME_SEQUENCE_START_JOINTS;", wait)
+        self.assertIn("#define HOME_DELAY 0.100", text)
+        for state in ("case HOME_INITIAL_BACKOFF_START:", "case HOME_INITIAL_SEARCH_START:"):
+            with self.subTest(state=state):
+                first = self.between(text, state, "break;\n\n        case")
+                self.assertIn("if (H[joint_num].pause_timer < (HOME_DELAY * servo_freq)) {",
+                              first)
+
+    @NEEDS_REFERENCE
+    def test_each_command_channel_is_a_channel_pair_of_its_own(self):
+        """Command_init: every linuxcnc.command() opens its own NML command
+        and status channels - the adapter's third, for DURDUR, included."""
+        init = self.between(_src(TestFakeFidelity.EMCMODULE), "static int Command_init(", "\n}\n")
+        self.assertIn('new RCS_CMD_CHANNEL(emcFormat, "emcCommand", "xemc", file);', init)
+        self.assertIn('new RCS_STAT_CHANNEL(emcFormat, "emcStatus", "xemc", file);', init)
+
+    @NEEDS_REFERENCE
+    def test_axis_binds_escape_to_task_stop_which_aborts(self):
+        axis = _src("emc/usr_intf/axis/scripts/axis.py")
+        self.assertIn('root_window.bind("<Escape>", commands.task_stop)', axis)
+        stop = self.between(axis, "    def task_stop(*event):", "    def mdi_up_cmd(")
+        self.assertIn("c.abort()", stop)
+        self.assertIn("c.wait_complete()", stop)
+
+
+class TestOverrideFidelity(unittest.TestCase):
+    """Plan WP05: what the fake does with the switch flags and the limit
+    override (FakeMachine.trip_on_limits, issue_override_limits, the mask
+    clearing in issue_jog_incr and set_traj_mode, the planner's
+    _NOT_ON_MANUAL_ONLY), and what LinuxCncAdapter.recover_limit relies on,
+    against reference/linuxcnc. Content, not line numbers."""
+
+    between = staticmethod(TestAbortFidelity.between)
+
+    @NEEDS_REFERENCE
+    def test_task_takes_the_override_out_of_on_in_manual_alone(self):
+        """emcTaskPlan: out of ON the override is issued in MANUAL and
+        otherwise dropped with retval 0 - no error, no message; ON, only
+        the MANUAL branch lists it (two cases in all), so AUTO and MDI
+        refuse it. The binding always sends joint 0: no withdrawing it."""
+        plan = self.between(_src("emc/task/emctaskmain.cc"), "static int emcTaskPlan(void)",
+                            "static int emcTaskCheckPreconditions(")
+        self.assertEqual(plan.count("case EMC_JOINT_OVERRIDE_LIMITS_TYPE:"), 2)
+        not_on = self.between(plan, "case EMC_JOINT_OVERRIDE_LIMITS_TYPE:", "break;")
+        self.assertIn("retval = 0;", not_on)
+        self.assertIn("if (emcStatus->task.mode == EMC_TASK_MODE_MANUAL) {", not_on)
+        self.assertNotIn("emcOperatorError", not_on)
+        manual_on = self.between(plan, "case EMC_TASK_MODE_MANUAL:\t// ON, MANUAL",
+                                 "case EMC_TASK_MODE_AUTO:\t// ON, AUTO")
+        self.assertIn("case EMC_JOINT_OVERRIDE_LIMITS_TYPE:", manual_on)
+        self.assertIn("EMC_JOINT_OVERRIDE_LIMITS", F._NOT_ON_MANUAL_ONLY)
+        self.assertIn("EMC_JOINT_OVERRIDE_LIMITS", F._MANUAL_OK)
+        for table in (F._NOT_ON_OK, F._AUTO_IDLE_OK, F._AUTO_READING_OK, F._MDI_OK,
+                      F._ALLOW_WHILE_IDLE):
+            self.assertNotIn("EMC_JOINT_OVERRIDE_LIMITS", table)
+        binding = self.between(_src(TestFakeFidelity.EMCMODULE),
+                               "static PyObject *override_limits(", "\n}")
+        self.assertIn("m.joint = 0;", binding)
+
+    @NEEDS_REFERENCE
+    def test_the_override_masks_only_the_sides_pressed_then(self):
+        """EMCMOT_OVERRIDE_LIMITS: joint >= 0 rebuilds the mask from the
+        flags of that instant; joint < 0 (which the binding never sends)
+        clears it."""
+        body = self.between(_src("emc/motion/command.c"), "case EMCMOT_OVERRIDE_LIMITS:",
+                            "case EMCMOT_SET_JOINT_MOTOR_OFFSET:")
+        self.assertIn("only override limits that are currently tripped", body)
+        self.assertIn("if ( GET_JOINT_NHL_FLAG(joint) ) {", body)
+        self.assertIn("emcmotStatus->overrideLimitMask |= (1 << (joint_num*2));", body)
+        self.assertIn("if ( GET_JOINT_PHL_FLAG(joint) ) {", body)
+        self.assertIn("emcmotStatus->overrideLimitMask |= (2 << (joint_num*2));", body)
+
+    @NEEDS_REFERENCE
+    def test_motion_trips_on_an_unmasked_flag_unless_the_joint_homes(self):
+        # The definitions, not the prototypes at the top of the file.
+        faults = self.between(_src("emc/motion/control.c"), "static void check_for_faults(void)\n{",
+                              "static void set_operating_mode(void)\n{")
+        trip = self.between(faults, "/* check for hard limits */", "/* check for amp fault */")
+        self.assertIn("GET_JOINT_PHL_FLAG(joint) && ! pos_limit_override", trip)
+        self.assertIn("GET_JOINT_NHL_FLAG(joint) && ! neg_limit_override", trip)
+        self.assertIn("if (get_homing(joint_num)) {", trip)
+        self.assertIn('reportError(_("joint %d on limit switch error")', trip)
+        self.assertIn("emcmotInternal->enabling = 0;", trip)
+        self.assertIn("GET_JOINT_ACTIVE_FLAG(joint) && GET_JOINT_ENABLE_FLAG(joint)", faults)
+
+    @NEEDS_REFERENCE
+    def test_the_mask_clears_only_at_a_jog_end_or_coordinated_mode(self):
+        """Every write of overrideLimitMask: the command (two), the end of a
+        free-mode move, the end of a teleop jog, entering coordinated mode,
+        and motion's start - not enabling, not an abort, not ESTOP."""
+        control = _src("emc/motion/control.c")
+        self.assertEqual(control.count("overrideLimitMask = 0;"), 3)
+        free = self.between(control, "case EMCMOT_MOTION_FREE:", "case KINEMATICS_IDENTITY:")
+        self.assertIn("if ( (emcmotInternal->overriding ) && ( GET_MOTION_INPOS_FLAG() ) ) {", free)
+        teleop = self.between(control, "case EMCMOT_MOTION_TELEOP:", "case EMCMOT_MOTION_DISABLED:")
+        self.assertIn("if ( ( emcmotInternal->overriding ) && ( !axis_jog_is_active() ) ) {",
+                      teleop)
+        coord = self.between(control, "/* check for entering coordinated mode */",
+                             "/* check entering free space mode */")
+        self.assertIn("emcmotStatus->overrideLimitMask = 0;", coord)
+        enabling = self.between(control, "/* check for emcmotInternal->enabling */",
+                                "/* check for entering teleop mode */")
+        self.assertNotIn("overrideLimitMask", enabling)
+        self.assertEqual(_src("emc/motion/command.c").count("overrideLimitMask = 0;"), 2)
+        self.assertEqual(_src("emc/motion/motion.c").count("overrideLimitMask = 0;"), 1)
+        status = _src("emc/task/taskintf.cc")
+        self.assertIn("overrideLimits = !!(emcmotStatus.overrideLimitMask);", status)
+
+    @NEEDS_REFERENCE
+    def test_a_jog_the_disable_cut_leaves_overriding_set(self):
+        """Review of WP05 (FakeMachine.overriding, end_override_jog): a jog
+        run under the mask sets motion's `overriding` in either planner, and
+        only their end-of-jog checks, entering coordinated mode and the
+        override command clear it - not the disabling, and the DISABLED
+        branch runs no check. So after an estop cut such a jog the status
+        still shows the override, and the mask drops at the next enable:
+        why recover_limit issues the override again on every press out of
+        ON, and the reset sends no ON onto a pressed switch at all."""
+        control = _src("emc/motion/control.c")
+        free = self.between(control, "case EMCMOT_MOTION_FREE:", "case KINEMATICS_IDENTITY:")
+        self.assertIn("emcmotInternal->overriding = 1;", free)
+        teleop = self.between(control, "case EMCMOT_MOTION_TELEOP:", "case EMCMOT_MOTION_DISABLED:")
+        self.assertIn("emcmotInternal->overriding = 1;", teleop)
+        disabled = self.between(control, "case EMCMOT_MOTION_DISABLED:", "default:")
+        self.assertNotIn("overriding", disabled)
+        disabling = self.between(control, "/* check for disabling */",
+                                 "/* check for emcmotInternal->enabling */")
+        self.assertNotIn("overriding", disabling)
+        self.assertEqual(control.count("emcmotInternal->overriding = 0;"), 3)
+        command = self.between(_src("emc/motion/command.c"), "case EMCMOT_OVERRIDE_LIMITS:",
+                               "case EMCMOT_SET_JOINT_MOTOR_OFFSET:")
+        self.assertIn("emcmotInternal->overriding = 0;", command)
+
+    @NEEDS_REFERENCE
+    def test_a_joint_jog_onto_a_switch_is_refused_a_teleop_jog_unchecked(self):
+        """joint_jog_ok refuses the pressed side, override or not, unless
+        both sides are overridden; axis_jog_incr checks only the soft
+        limits."""
+        command = _src("emc/motion/command.c")
+        ok = self.between(command, "STATIC int joint_jog_ok(int joint_num, double vel)",
+                          "void refresh_jog_limits(")
+        self.assertIn("if ( neg_limit_override && pos_limit_override ) {", ok)
+        self.assertIn("if (vel > 0.0 && GET_JOINT_PHL_FLAG(joint)) {", ok)
+        self.assertIn("if (vel < 0.0 && GET_JOINT_NHL_FLAG(joint)) {", ok)
+        jog_incr = self.between(command, "/* do an incremental jog */", "case EMCMOT_JOG_ABS:")
+        self.assertIn("if (!joint_jog_ok(joint_num, emcmotCommand->vel)) {", jog_incr)
+        axis = self.between(_src("emc/motion/axis.c"), "void axis_jog_incr(", "void axis_jog_abs(")
+        self.assertNotIn("HL_FLAG", axis)
+        self.assertIn("if (tmp1 > axis->max_pos_limit) { return; }", axis)
+
+
+class TestJogFidelity(unittest.TestCase):
+    """Plan WP06: what the jog rule (motionrules.jog_refusal) and the fake's
+    jog model (FakeMachine.issue_jog_incr with `soft_limits`,
+    _joint_jog_in_window; end_homing) rely on, against reference/linuxcnc.
+    Content, not line numbers."""
+
+    between = staticmethod(TestAbortFidelity.between)
+
+    @NEEDS_REFERENCE
+    def test_a_jog_during_homing_is_refused_with_a_joint_error_and_task_aborts(self):
+        """Why the UI refuses it first: motion's refusal sets the joint's
+        error flag, task reads that as motion's error and aborts - which
+        cancels the homing (TestAbortFidelity)."""
+        command = _src("emc/motion/command.c")
+        jog_incr = self.between(command, "/* do an incremental jog */", "case EMCMOT_JOG_ABS:")
+        homing = self.between(jog_incr, "if ( get_homing_is_active() ) {", "break;")
+        self.assertIn('reportError(_("Can\'t jog any joint while homing."));', homing)
+        self.assertIn("SET_JOINT_ERROR_FLAG(joint, 1);", homing)
+        task = _src("emc/task/taskintf.cc")
+        flag = self.between(task, "if (joint->flag & EMCMOT_JOINT_ERROR_BIT) {", "} else if")
+        self.assertIn("stat[joint_num].status = RCS_ERROR;", flag)
+        self.assertIn("if (stat->joint[joint].status == RCS_ERROR) {", task)
+        main = _src("emc/task/emctaskmain.cc")
+        abort = self.between(main, "} else if (emcStatus->motion.status == RCS_ERROR ||",
+                             "mdi_execute_abort();")
+        self.assertIn("emcTaskAbort();", abort)
+        # The fake refuses it the same way: an error and the joint's flag
+        # (RCS_ERROR on the wait).
+        fake = inspect.getsource(F.FakeMachine.issue_jog_incr)
+        self.assertIn('raise MotionRejected("Can\'t jog any joint while homing.", '
+                      'sets_joint_error=True)', fake)
+
+    @NEEDS_REFERENCE
+    def test_an_increment_adds_to_the_planners_target(self):
+        """A second click while one runs extends it (why moving refuses):
+        free mode from free_tp.pos_cmd, teleop from teleop_tp.pos_cmd."""
+        jog_incr = self.between(_src("emc/motion/command.c"), "/* do an incremental jog */",
+                                "case EMCMOT_JOG_ABS:")
+        self.assertIn("tmp1 = joint->free_tp.pos_cmd + emcmotCommand->offset;", jog_incr)
+        self.assertIn("tmp1 = joint->free_tp.pos_cmd - emcmotCommand->offset;", jog_incr)
+        self.assertIn("axis_jog_incr(emcmotCommand->axis, emcmotCommand->offset, "
+                      "emcmotCommand->vel, servo_period);", jog_incr)
+        axis = self.between(_src("emc/motion/axis.c"), "void axis_jog_incr(", "void axis_jog_abs(")
+        self.assertIn("tmp1 = axis->teleop_tp.pos_cmd + offset;", axis)
+        self.assertIn("tmp1 = axis->teleop_tp.pos_cmd - offset;", axis)
+
+    @NEEDS_REFERENCE
+    def test_past_the_limits_motion_drops_the_jog_without_a_word(self):
+        """Teleop: the axis's limits, homed or not, a silent return. Free:
+        the jog limits - soft limits homed, position +- travel unhomed -
+        refused with an error from beyond them, dropped silently past them.
+        The fake models exactly these (`soft_limits`)."""
+        axis = self.between(_src("emc/motion/axis.c"), "void axis_jog_incr(", "void axis_jog_abs(")
+        self.assertIn("if (tmp1 > axis->max_pos_limit) { return; }", axis)
+        self.assertIn("if (tmp1 < axis->min_pos_limit) { return; }", axis)
+        self.assertNotIn("homed", axis)
+        self.assertNotIn("reportError", axis)
+        command = _src("emc/motion/command.c")
+        refresh = self.between(command, "void refresh_jog_limits(emcmot_joint_t *joint, int joint_num)\n{",
+                               "\n}\n")
+        homed = self.between(refresh, "if (get_homed(joint_num) ) {", "} else {")
+        self.assertIn("joint->max_jog_limit = joint->max_pos_limit;", homed)
+        self.assertIn("joint->min_jog_limit = joint->min_pos_limit;", homed)
+        unhomed = refresh[refresh.index("} else {"):]
+        self.assertIn("range = joint->max_pos_limit - joint->min_pos_limit;", unhomed)
+        self.assertIn("joint->max_jog_limit = joint->pos_fb + range;", unhomed)
+        self.assertIn("joint->min_jog_limit = joint->pos_fb - range;", unhomed)
+        ok = self.between(command, "STATIC int joint_jog_ok(int joint_num, double vel)",
+                          "void refresh_jog_limits(")
+        self.assertIn("if ( vel > 0.0 && (joint->pos_cmd > joint->max_jog_limit) ) {", ok)
+        self.assertIn('"Can\'t jog joint %d further past max soft limit."', ok)
+        self.assertIn("if ( vel < 0.0 && (joint->pos_cmd < joint->min_jog_limit) ) {", ok)
+        jog_incr = self.between(command, "/* do an incremental jog */", "case EMCMOT_JOG_ABS:")
+        drop = jog_incr[jog_incr.index("/* don't jog past limits */"):]
+        self.assertRegex(drop, r"if \(tmp1 > joint->max_jog_limit\) \{\s*break;\s*\}")
+        self.assertRegex(drop, r"if \(tmp1 < joint->min_jog_limit\) \{\s*break;\s*\}")
+        # The soft limits' defaults when the INI gives none: no limit.
+        joint_ini = _src("emc/ini/inijoint.cc")
+        self.assertRegex(joint_ini, r"limit = -1e99;[^\n]*\n\s*jointIniFile->Find\(&limit, \"MIN_LIMIT\"")
+        self.assertRegex(joint_ini, r"limit = 1e99;[^\n]*\n\s*jointIniFile->Find\(&limit, \"MAX_LIMIT\"")
+
+    @NEEDS_REFERENCE
+    def test_both_sides_overridden_skips_the_soft_limit_refusals_too(self):
+        """joint_jog_ok returns before all its tests when both of a joint's
+        sides are overridden - the soft-limit refusals as well as the
+        switch ones - so only JOG_INCR's silent drop is left
+        (FakeMachine._joint_jog_in_window `both`; review of WP06)."""
+        ok = self.between(_src("emc/motion/command.c"),
+                          "STATIC int joint_jog_ok(int joint_num, double vel)",
+                          "void refresh_jog_limits(")
+        both = self.between(ok, "if ( neg_limit_override && pos_limit_override ) {", "}")
+        self.assertIn("return 1;", both)
+        self.assertLess(ok.index("if ( neg_limit_override && pos_limit_override ) {"),
+                        ok.index("refresh_jog_limits(joint,joint_num);"))
+        self.assertLess(ok.index("refresh_jog_limits(joint,joint_num);"),
+                        ok.index('"Can\'t jog joint %d further past max soft limit."'))
+
+    @NEEDS_REFERENCE
+    def test_the_commanded_position_is_where_the_planner_stands(self):
+        """stat.position is carte_pos_cmd, which teleop fills from its
+        planner's position; that position stops within tiny_dp of the
+        target, and a planner not enabled takes its target from its
+        position (why the cut jog keeps JOG_LIMIT_MARGIN_MM)."""
+        self.assertIn("stat->position = emcmotStatus.carte_pos_cmd;", _src("emc/task/taskintf.cc"))
+        teleop = self.between(_src("emc/motion/control.c"), "case EMCMOT_MOTION_TELEOP:",
+                              "case EMCMOT_MOTION_DISABLED:")
+        self.assertIn("axis_sync_carte_pos_to_teleop_tp(+1, pcmd_p);", teleop)
+        simple = _src("emc/motion/simple_tp.c")
+        self.assertIn("within 'tiny_dp' of desired pos, no need to move", simple)
+        self.assertIn("tp->pos_cmd = tp->curr_pos;", simple)
+        self.assertIn("#define TINY_DP(max_acc,period) (max_acc*period*period*0.001)",
+                      _src("emc/motion/simple_tp.h"))
+
+    @NEEDS_REFERENCE
+    def test_homing_ends_at_home_and_manual_means_teleop_once_homed(self):
+        """FakeMachine.end_homing and the rule's mode prediction."""
+        homing = _src("emc/motion/homing.c")
+        final = self.between(homing, "case HOME_FINAL_MOVE_START:", "case HOME_FINAL_MOVE_WAIT:")
+        self.assertIn("joint->free_tp.pos_cmd = H[joint_num].home;", final)
+        finished = self.between(homing, "case HOME_FINISHED:", "break;")
+        self.assertIn("H[joint_num].homed = 1;", finished)
+        self.assertIn("joints[joint_num].free_tp.curr_pos = H[joint_num].home;", finished)
+        self.assertRegex(_src("emc/ini/inijoint.cc"),
+                         r"home = 0;[^\n]*\n\s*jointIniFile->Find\(&home, \"HOME\"")
+        manual = self.between(_src("emc/task/emctask.cc"), "case EMC_TASK_MODE_MANUAL:", "break;")
+        self.assertRegex(manual, r"if \(all_homed\(\)\) \{\s*emcTrajSetMode\(EMC_TRAJ_MODE_TELEOP\);"
+                                 r"\s*\} else \{\s*emcTrajSetMode\(EMC_TRAJ_MODE_FREE\);")
+
+    def test_the_fakes_home_is_the_rigs(self):
+        """RIG_HOME is [JOINT_n]HOME of the rig's INI, by axis letter."""
+        from helpers import ini_raw_values
+        ini = ini_raw_values()
+        letters = ini["TRAJ.COORDINATES"].replace(" ", "")
+        self.assertEqual(F.RIG_HOME, {letter: float(ini["JOINT_{}.HOME".format(j)])
+                                      for j, letter in enumerate(letters)})
+
+    def test_the_fakes_home_sequence_is_the_rigs(self):
+        """RIG_HOME_SEQUENCE is [JOINT_n]HOME_SEQUENCE of the rig's INI."""
+        from helpers import ini_raw_values
+        ini = ini_raw_values()
+        letters = ini["TRAJ.COORDINATES"].replace(" ", "")
+        self.assertEqual(F.RIG_HOME_SEQUENCE,
+                         {letter: int(ini["JOINT_{}.HOME_SEQUENCE".format(j)])
+                          for j, letter in enumerate(letters)})
+
+
+class TestHomingFidelity(unittest.TestCase):
+    """Plan WP07: what one axis's homing and the re-home question rely on -
+    the fake's home model (FakeMachine.issue_home, the planner's
+    _MANUAL_OK), LinuxCncAdapter._home and motionrules.home_question -
+    against reference/linuxcnc. Content, not line numbers."""
+
+    between = staticmethod(TestAbortFidelity.between)
+
+    @NEEDS_REFERENCE
+    def test_task_takes_a_home_only_on_in_manual_and_motion_only_in_free_mode(self):
+        plan = self.between(_src("emc/task/emctaskmain.cc"), "static int emcTaskPlan(void)",
+                            "static int emcTaskCheckPreconditions(")
+        self.assertEqual(plan.count("case EMC_JOINT_HOME_TYPE:"), 1)
+        on_manual = self.between(plan, "case EMC_TASK_MODE_MANUAL:\t// ON, MANUAL",
+                                 "// queued commands")
+        self.assertIn("case EMC_JOINT_HOME_TYPE:", on_manual)
+        self.assertIn("EMC_JOINT_HOME", F._MANUAL_OK)
+        for table in (F._NOT_ON_OK, F._AUTO_IDLE_OK, F._AUTO_READING_OK, F._MDI_OK,
+                      F._ALLOW_WHILE_IDLE):
+            self.assertNotIn("EMC_JOINT_HOME", table)
+        home = self.between(_src("emc/motion/command.c"), "case EMCMOT_JOINT_HOME:",
+                            "case EMCMOT_JOINT_UNHOME:")
+        self.assertIn("if (emcmotStatus->motion_state != EMCMOT_MOTION_FREE) {", home)
+        self.assertIn('reportError(_("must be in joint mode to home"));', home)
+        self.assertIn("do_home_joint(joint_num);", home)
+
+    @NEEDS_REFERENCE
+    def test_one_joint_with_a_sequence_not_negative_is_homed_alone(self):
+        """home(j) homes joint j alone on the rig (sequences 0 / 1 / 2): the
+        sequence takes only the joint started (FakeMachine.issue_home)."""
+        homing = _src("emc/motion/homing.c")
+        one = self.between(homing, "static void do_home_one_joint(int jno)", "\n} // do_home_one_joint")
+        self.assertRegex(one, r"if \(H\[jno\]\.home_sequence < 0\) \{")
+        self.assertRegex(one, r"\} else \{\s*sequence_state = HOME_SEQUENCE_DO_ONE_JOINT;\s*\}")
+        self.assertIn("H[jno].home_state = HOME_START;", one)
+        only = self.between(homing, "case HOME_SEQUENCE_DO_ONE_JOINT:",
+                            "case HOME_SEQUENCE_DO_ONE_SEQUENCE:")
+        self.assertRegex(only, r"if \(H\[i\]\.home_state == HOME_START\) \{\s*"
+                               r"H\[i\]\.joint_in_sequence = 1;")
+        self.assertRegex(only, r"\} else \{\s*H\[i\]\.joint_in_sequence = 0;")
+        dispatch = self.between(homing, "static void base_do_home_joint(int jno) {", "\n}\n")
+        self.assertRegex(dispatch, r"if \(jno == -1\) \{\s*H\[0\]\.homed = 0;[^\n]*\n\s*"
+                                   r"do_home_all\(\);\s*\} else \{\s*do_home_one_joint\(jno\);")
+
+    @NEEDS_REFERENCE
+    def test_a_homing_unhomes_its_joints_as_it_starts(self):
+        """Every joint of the sequence at its start, each again in
+        HOME_START - so a joint homed again reads unhomed until it ends,
+        as FakeMachine.issue_home models it."""
+        homing = _src("emc/motion/homing.c")
+        start = self.between(homing, "/* Initializations */", "/* tell the world we're on the job */")
+        self.assertIn("if (!H[i].joint_in_sequence) continue;", start)
+        self.assertRegex(start, r"\} else \{\s*H\[i\]\.homed = 0;\s*\}")
+        first = self.between(homing, "case HOME_START:", "case HOME_UNLOCK:")
+        self.assertRegex(first, r"H\[joint_num\]\.homing = 1;\s*H\[joint_num\]\.homed = 0;")
+        machine = F.FakeMachine(home_instantly=False)
+        machine.power_on(homed=True)
+        machine.motion_mode = C["TRAJ_MODE_FREE"]
+        machine.issue_home(2)
+        self.assertEqual((machine.homed[:3], machine.homing[:3]), ([1, 1, 0], [0, 0, 1]))
+
+    @NEEDS_REFERENCE
+    def test_motion_goes_to_teleop_only_when_a_homing_leaves_every_joint_homed(self):
+        """After one joint homed alone, the others unhomed, motion stays in
+        free mode - the next jog is a joint jog (_select_jog_mode)."""
+        homing = _src("emc/motion/homing.c")
+        done = self.between(homing, "static bool base_do_homing(void)", "} // base_do_homing()")
+        self.assertIn("bool beginning_allhomed = get_allhomed();", done)
+        self.assertIn("if (!beginning_allhomed && get_allhomed()) {homing_active=0; return 1;}", done)
+        self.assertRegex(_src("emc/motion/control.c"),
+                         r"if \(\s*\(emcmotStatus->motion_state == EMCMOT_MOTION_FREE\)\s*"
+                         r"&& do_homing\(\)\) \{\s*switch_to_teleop_mode\(\);")
+
+    @NEEDS_REFERENCE
+    def test_home_all_runs_group_by_group_with_a_gap_between(self):
+        """P0 cleanup: the fake's Home All (home_all_groups, advance_homing)
+        against homing.c's sequence: groups by abs(sequence) from 0 up, the
+        sequence over at the first number no joint has (unless 0), a joint
+        with HOME_SEQUENCE over 100 (999 when unset) left out, a jog refused
+        while homing is active - between two groups too."""
+        homing = _src("emc/motion/homing.c")
+        start = self.between(homing, "case HOME_SEQUENCE_START_JOINTS:",
+                             "case HOME_SEQUENCE_WAIT_JOINTS:")
+        self.assertIn("if(ABS(H[i].home_sequence) == current_sequence) {", start)
+        self.assertRegex(start, r"if \(seen \|\| current_sequence == 0\) \{\s*"
+                                r"sequence_state = HOME_SEQUENCE_WAIT_JOINTS;")
+        wait = self.between(homing, "case HOME_SEQUENCE_WAIT_JOINTS:", "default:")
+        self.assertRegex(wait, r"current_sequence\+\+;\s*sequence_state = HOME_SEQUENCE_START_JOINTS;")
+        self.assertIn("if (H[i].home_sequence >100) {", homing)
+        self.assertIn("sequence = 999;", _src("emc/ini/inijoint.cc"))
+        self.assertRegex(_src("emc/motion/command.c"), r"if \( get_homing_is_active\(\) \) \{\s*"
+                              r"reportError\(_\(\"Can't jog any joint while homing.\"\)\);")
+        m = F.FakeMachine(home_instantly=False)
+        self.assertEqual(m.home_all_groups(), [[2], [1], [0]])        # the rig: Z, Y, X
+        self.assertEqual(F.FakeMachine(home_sequence={"X": 0, "Y": 2, "Z": 3})
+                         .home_all_groups(), [[0]])                 # no 1: over after 0
+        self.assertEqual(F.FakeMachine(home_sequence={"X": 1, "Y": -1, "Z": 2})
+                         .home_all_groups(), [[0, 1], [2]])         # no 0 is fine
+        self.assertEqual(F.FakeMachine(home_sequence={"X": 0, "Y": 1})
+                         .home_all_groups(), [[0], [1]])            # Z: 999, left out
+        m.power_on()
+        m.issue_home(-1)
+        seen = [(list(m.homing[:3]), list(m.homed[:3]))]
+        while m.homing_active:
+            m.advance_homing()
+            seen.append((list(m.homing[:3]), list(m.homed[:3])))
+        self.assertEqual(seen, [
+            ([0, 0, 1], [0, 0, 0]),       # Z homing
+            ([0, 0, 0], [0, 0, 1]),       # the gap: Z homed, homing still active
+            ([0, 1, 0], [0, 0, 1]),       # Y homing
+            ([0, 0, 0], [0, 1, 1]),       # the gap
+            ([1, 0, 0], [0, 1, 1]),       # X homing
+            ([0, 0, 0], [1, 1, 1]),       # over
+        ])
+
+    def test_a_jog_in_the_gap_between_groups_is_refused_by_motion(self):
+        m = F.FakeMachine(home_instantly=False)
+        m.power_on()
+        m.issue_home(-1)
+        m.advance_homing()                       # Z homed, Y not started yet
+        self.assertTrue(m.homing_active)
+        m.submit("EMC_JOG_INCR", lambda: m.issue_jog_incr(1, 0, 1.0, 1.0))
+        self.assertEqual(list(m.errors)[-1], (C["OPERATOR_ERROR"], "Can't jog any joint while homing."))
+
+    @NEEDS_REFERENCE
+    def test_one_joint_with_a_negative_sequence_homes_its_group(self):
+        """do_home_one_joint (homing.c:265-281): a negative sequence homes
+        every joint sharing abs(sequence) (home_one_targets)."""
+        one = self.between(_src("emc/motion/homing.c"), "static void do_home_one_joint(int jno)",
+                           "\n} // do_home_one_joint")
+        self.assertIn("if (ABS(H[jj].home_sequence) == ABS(H[jno].home_sequence)) {", one)
+        m = F.FakeMachine(home_instantly=False, home_sequence={"X": 1, "Y": -1, "Z": 0})
+        m.power_on()
+        m.issue_home(1)
+        self.assertEqual(m.homing[:3], [1, 1, 0])
+        m.finish_homing()
+        self.assertEqual(m.homed[:3], [1, 1, 0])
+        self.assertEqual(m.motion_mode, C["TRAJ_MODE_FREE"])      # Z still unhomed
+        m.issue_home(2)
+        m.finish_homing()
+        self.assertEqual(m.motion_mode, C["TRAJ_MODE_TELEOP"])    # every joint homed now
+
+    @NEEDS_REFERENCE
+    def test_axis_asks_before_homing_again_and_homes_no_duplicated_letter_alone(self):
+        """motionrules.home_question and home_axis_refusal follow AXIS - and
+        ask more (plan design (g): any joint homed, not only all)."""
+        axis = _src("emc/usr_intf/axis/scripts/axis.py")
+        every = self.between(axis, "    def home_all_joints(event=None):",
+                             "    def unhome_all_joints(event=None):")
+        self.assertIn("isHomed = all_homed()", every)
+        self.assertIn("Joint is already homed, are you sure you want to re-home?", every)
+        self.assertIn("go_home(-1)", every)
+        one = self.between(axis, "    def home_joint(event=None):", "    def home_joint_number(num):")
+        self.assertRegex(one, r"if jora in duplicate_coord_letters:\s*\n\s*print\(_\(\"\\nIndividual "
+                              r"axis homing disallowed for duplicated letter")
+        self.assertIn("if s.homed[jnum]:", one)
+        self.assertIn("This joint is already homed, are you sure you want to re-home?", one)
+        go = self.between(axis, "def go_home(num):", "\n#----")
+        self.assertIn("set_motion_teleop(0)", go)
+        self.assertIn("c.home(num)", go)
+
+
 class TestAdapterUsesOnlyWhatTheFakeProvides(unittest.TestCase):
     """Every `linuxcnc`/`hal` name LinuxCncAdapter touches must exist in the
     fake; TestFakeFidelity then ties the fake to the binding. Without this a
@@ -634,10 +1270,11 @@ class TestAdapterUsesOnlyWhatTheFakeProvides(unittest.TestCase):
     #: checks the very patterns the surface tests run.
     CONST_RES = (re.compile(r"\bL\.(\w+)"), re.compile(r"self\._linuxcnc\.(\w+)"))
     MODULE_CALL_RE = re.compile(r"\blinuxcnc\.(\w+)\(")
-    #: The action channel through _send(), the estop channel, and waits.
+    #: The action channel through _send(), the estop and stop channels, and
+    #: waits.
     COMMAND_RES = (
         re.compile(r"self\._send\(\)\.(\w+)"),
-        re.compile(r"self\._(?:command|estop_channel)\.(\w+)"),
+        re.compile(r"self\._(?:command|estop_channel|stop_channel)\.(\w+)"),
     )
     STAT_RES = (re.compile(r"\bs\.(\w+)"), re.compile(r"self\._stat\.(\w+)"))
     MAPPED_STAT_RE = re.compile(r'getattr\(stat, "(\w+)"')
@@ -728,9 +1365,10 @@ class TestConstructor(FakeCase):
 
     def test_estop_channel_is_opened_up_front_and_used_only_for_the_estop(self):
         """Opening a channel at estop time could fail or block exactly when it
-        matters, so both channels exist after construction."""
+        matters, so every channel exists after construction: the action
+        channel, the estop's and (plan WP03) DURDUR's."""
         adapter = self.on(homed=True)
-        self.assertEqual(len(self.machine.channels), 2)
+        self.assertEqual(len(self.machine.channels), 3)
         adapter.jog("X", 1)
         adapter.software_estop()
         adapter.software_estop_reset()
@@ -928,12 +1566,16 @@ class TestSnapshot(FakeCase):
         adapter = self.on(machine=F.FakeMachine(home_instantly=False))
         adapter.home_all()
         snap = adapter.snapshot()
-        self.assertEqual({j.phase for j in snap.homing.joints}, {HomingPhase.HOMING})
+        self.assertEqual([j.phase for j in snap.homing.joints],      # Z first
+                         [HomingPhase.NOT_HOMED, HomingPhase.NOT_HOMED, HomingPhase.HOMING])
         self.assertEqual(snap.status_label, "REFERANS ALINIYOR")
         self.machine.finish_homing()
         self.assertTrue(adapter.snapshot().homing.all_homed)
 
     def test_error_channel_is_drained_newest_first_with_severity(self):
+        """Every message in the log; of the two error kinds the FIRST is the
+        message (plan WP04: until then the last one won, and LinuxCNC says
+        the specific error before the generic one)."""
         adapter = self.make()
         self.machine.errors.extend([
             (C["NML_ERROR"], "first"),
@@ -949,7 +1591,8 @@ class TestSnapshot(FakeCase):
             ("second", Severity.INFO, "linuxcnc"),
             ("first", Severity.ERROR, "linuxcnc"),
         ])
-        self.assertEqual(snap.message, "LinuxCNC: fourth")
+        self.assertEqual(snap.message, "LinuxCNC: first")
+        self.assertEqual((snap.last_error.text, snap.last_error.raw), ("LinuxCNC: first", "first"))
         self.assertEqual(len(self.machine.errors), 0)
         self.assertEqual(len(adapter.snapshot().alarms), 4, "drained twice")
 
@@ -1193,13 +1836,15 @@ class TestActionsWithTheStatusLost(FakeCase):
         self.assertEqual(snap.message, "MDI: G0 X1 — " + self.REFUSAL)
 
     def test_stop_still_sends_abort_and_says_the_result_is_unknown(self):
-        """Stopping never waits on a read: abort() goes out first. Afterwards
-        the status cannot be read, so the message must not claim either
-        "stopped" or "nothing sent"."""
+        """Stopping never waits on a read: both aborts go out first - the
+        first (stop_motion) reads nothing at all. Afterwards the status
+        cannot be read, so the message must not claim either "stopped" or
+        "nothing sent". (Until plan WP03 this was program_stop, one abort.)"""
         adapter = self.on(homed=True)
         self.machine.channels_valid = False
-        adapter.program_stop()
-        self.assertEqual(self.machine.calls(), ["abort", "wait_complete"])
+        adapter.stop_motion()
+        adapter.stop_followup()
+        self.assertEqual(self.machine.calls(), ["abort", "abort", "wait_complete"])
         self.assertEqual(
             adapter.snapshot().message,
             "LinuxCNC'ye bağlantı koptu — gönderilen komutun sonucu bilinmiyor.",
@@ -1284,16 +1929,19 @@ class TestJog(FakeCase):
         fn, jjogmode, index, vel, incr = self.jogs()[0]
         self.assertEqual((fn, jjogmode, index), (C["JOG_INCREMENT"], 1, 0))
         self.assertEqual(self.machine.joint_pos[0], 1.0)
-        self.assertEqual(adapter.snapshot().message, "Jog X+1 mm gönderildi (eklem).")
+        # Plan WP06: what moved, which way, how far - no "joint"/"axis".
+        self.assertEqual(adapter.snapshot().message, "Jog X+1 mm.")
 
     def test_after_homing_jogs_the_axis(self):
+        """Homed, the fake stands at the rig's HOME (5, 5, -5), as homing
+        leaves it (FakeMachine.end_homing)."""
         adapter = self.on(homed=True)
         adapter.jog("Z", 1)
         self.assertNoLinuxCncErrors()
         fn, jjogmode, index, vel, incr = self.jogs()[0]
         self.assertEqual((jjogmode, index), (0, 2))
-        self.assertEqual(self.machine.axis_pos[2], 1.0)
-        self.assertEqual(adapter.snapshot().message, "Jog Z+1 mm gönderildi (eksen).")
+        self.assertAlmostEqual(self.machine.axis_pos[2], -4.0)
+        self.assertEqual(adapter.snapshot().message, "Jog Z+1 mm.")
 
     def test_homed_but_in_free_mode_switches_to_teleop_first(self):
         """axis.py:3239-3241: switch motion with teleop_enable, then wait."""
@@ -1307,11 +1955,16 @@ class TestJog(FakeCase):
 
     def test_teleop_not_reached_refuses_without_jogging(self):
         """Motion drops a teleop request while not in position (control.c:
-        927-958). The adapter reads the mode back instead of jogging anyway."""
+        927-958). The adapter reads the mode back instead of jogging anyway.
+        Motion here ignores the request (as it does out of position): with
+        a joint jog actually running the jog is refused before anything is
+        sent (plan WP06, test_jog_rules)."""
         adapter = self.on(homed=True)
         self.machine.motion_mode = C["TRAJ_MODE_FREE"]
-        self.machine.jogging_active = True
+        teleop = self.machine.issue_teleop
+        self.machine.issue_teleop = lambda enable: None
         adapter.jog("Y", 1)
+        self.machine.issue_teleop = teleop
         self.assertEqual(self.machine.calls(), ["teleop_enable", "wait_complete"])
         self.assertEqual(
             adapter.snapshot().message,
@@ -1320,9 +1973,12 @@ class TestJog(FakeCase):
 
     def test_unhomed_teleop_set_elsewhere_is_kept(self):
         """Identity kins allow teleop unhomed (motion.c:166-171 only checks
-        other kins); axis.py keeps whatever motion is in (:3230-3237)."""
+        other kins); axis.py keeps whatever motion is in (:3230-3237). A
+        teleop jog is checked against the axis's soft limits, homed or not
+        (axis.c:289-290; plan WP06): X stands inside them here."""
         adapter = self.on(homed=False)
         self.machine.motion_mode = C["TRAJ_MODE_TELEOP"]
+        self.machine.axis_pos[0] = self.machine.joint_pos[0] = 50.0
         adapter.jog("X", -1)
         self.assertNoLinuxCncErrors()
         self.assertEqual(self.machine.calls(), ["jog"])
@@ -1362,14 +2018,15 @@ class TestJog(FakeCase):
         the test rig the two coincide, so a machine whose joint 1 is Z is the
         only way to tell them apart."""
         cfg = {0: {"axis": "X"}, 1: {"axis": "Z"}}
-        for homed, expected in ((False, (1, 1)), (True, (0, 2))):
+        # Homed, Z starts at its HOME, -5 (FakeMachine.end_homing).
+        for homed, expected, z in ((False, (1, 1), 1.0), (True, (0, 2), -4.0)):
             with self.subTest(homed=homed):
                 adapter = self.make(machine=F.FakeMachine(coordinates="XZ"), joint_config=cfg)
                 self.machine.power_on(homed=homed)
                 adapter.jog("Z", 1)
                 self.assertNoLinuxCncErrors()
                 self.assertEqual(self.jogs()[0][1:3], expected)
-                self.assertEqual(self.machine.axis_pos[2], 1.0)
+                self.assertAlmostEqual(self.machine.axis_pos[2], z)
 
     def test_gantry_duplicate_letter_jogs_the_first_joint_then_the_axis(self):
         """XYYZ: joints 1 and 2 both carry Y. axis.py jogs the first joint of a
@@ -1488,12 +2145,17 @@ class TestHomeAll(FakeCase):
     def test_rehoming_leaves_teleop_first(self):
         """After homing MANUAL means teleop (emctask.cc:277-278) and motion
         homes only in free mode (command.c:1374-1378). Without teleop off the
-        second home is refused."""
-        adapter = self.on(homed=True)
-        adapter.home_all()
+        second home is refused. Confirmed: a homed machine is asked about
+        first (plan WP07, test_homing_single)."""
+        adapter = self.on(homed=True, machine=F.FakeMachine(home_instantly=False))
+        adapter.home_all(confirmed=True)
         self.assertNoLinuxCncErrors()
         self.assertEqual(self.machine.log[-1], ("home", (-1,)))
         self.assertEqual(self.machine.motion_mode, C["TRAJ_MODE_FREE"])
+        # Motion goes back to teleop by itself once every joint is homed
+        # (homing.c:1400, control.c:261-263).
+        self.machine.finish_homing()
+        self.assertEqual(self.machine.motion_mode, C["TRAJ_MODE_TELEOP"])
 
     def test_leaving_teleop_aborts_a_teleop_jog_then_homes(self):
         """EMCMOT_FREE aborts every teleop jog (axis_jog_abort_all,
@@ -1501,7 +2163,7 @@ class TestHomeAll(FakeCase):
         (control.c:961-972) - in the fake, at once."""
         adapter = self.on(homed=True)
         self.machine.jogging_active = True
-        adapter.home_all()
+        adapter.home_all(confirmed=True)
         self.assertNoLinuxCncErrors()
         self.assertFalse(self.machine.jogging_active)
         self.assertEqual(self.machine.calls(), ["teleop_enable", "wait_complete", "home"])
@@ -1517,7 +2179,7 @@ class TestHomeAll(FakeCase):
                     super().issue_teleop(enable)
 
         adapter = self.on(homed=True, machine=SlowToLeaveTeleop())
-        adapter.home_all()
+        adapter.home_all(confirmed=True)
         self.assertNotIn("home", self.machine.calls())
         self.assertEqual(adapter.snapshot().message, (
             "Eklem moduna geçilemedi (LinuxCNC jogu durdurup hareket bitince "
@@ -1536,23 +2198,50 @@ class TestHomeAll(FakeCase):
         del self.machine.log[:]
         adapter.home_all()
         self.assertEqual(self.machine.log, [])
-        self.assertEqual(adapter.snapshot().message, "Referans alma sürüyor.")
+        # Plan WP07: the refusal says how a homing is ended.
+        self.assertEqual(adapter.snapshot().message,
+                         "Referans alma sürüyor — durdurmak için «Durdur».")
         self.machine.finish_homing()
         self.assertTrue(adapter.snapshot().homing.all_homed)
 
+    def test_a_home_all_leaves_motion_in_teleop_and_the_next_jog_needs_no_switch(self):
+        """homing.c:1400 + control.c:261-263: the homing that leaves every
+        joint homed switches motion to teleop. Until the P0 cleanup the fake
+        stayed in free mode and a jog after Home All logged one
+        teleop_enable(1) LinuxCNC would not need."""
+        adapter = self.on(homed=False)
+        adapter.home_all()
+        self.assertEqual(self.machine.motion_mode, C["TRAJ_MODE_TELEOP"])
+        del self.machine.log[:]
+        adapter.jog("Z", -1)
+        self.assertNoLinuxCncErrors()
+        self.assertEqual(self.machine.calls(), ["jog"])
+        self.assertEqual(self.jogs()[0][1:3], (0, 2))          # an axis (teleop) jog
+
     def test_the_fake_unhomes_joint_0_on_a_second_home_all(self):
-        """What the refusal above prevents, straight on the fake."""
-        machine = F.FakeMachine(home_instantly=False)
-        machine.power_on()
-        with F.installed(machine=machine) as (lc, _, m, _):
-            c = lc.command()
-            c.home(-1)
-            m.homing[0], m.homed[0] = 0, 1
-            c.home(-1)
-            self.assertEqual(m.homed[0], 0)
-            self.assertEqual(m.homing[:3], [0, 1, 1])
-            m.finish_homing()
-        self.assertEqual(m.homed[:3], [0, 1, 1])
+        """What the refusal above prevents, straight on the fake: with joint
+        0 homed first, a second home(-1) in the sequence - mid-group or in
+        the gap between groups (homing_active, homing.c:258-263) - unhomes
+        joint 0 and does not restart."""
+        for gap in (False, True):
+            with self.subTest(gap=gap):
+                machine = F.FakeMachine(home_instantly=False,
+                                        home_sequence={"X": 0, "Y": 1, "Z": 2})
+                machine.power_on()
+                with F.installed(machine=machine) as (lc, _, m, _):
+                    c = lc.command()
+                    c.home(-1)
+                    self.assertEqual(m.homing[:3], [1, 0, 0])
+                    m.advance_homing()                       # X homed: the gap
+                    self.assertEqual((m.homed[:3], m.homing[:3]), ([1, 0, 0], [0, 0, 0]))
+                    if not gap:
+                        m.advance_homing()                   # Y starts
+                        self.assertEqual(m.homing[:3], [0, 1, 0])
+                    c.home(-1)
+                    self.assertEqual(m.homed[0], 0)
+                    m.finish_homing()
+                self.assertEqual(m.homed[:3], [0, 1, 1])
+                self.assertEqual(m.motion_mode, C["TRAJ_MODE_FREE"])   # not all homed
 
     def test_from_auto_mode_switches_to_manual_first(self):
         adapter = self.on(homed=False)
@@ -1594,7 +2283,8 @@ class TestEveryWaitIsBounded(FakeCase):
         adapter.send_mdi("G0 X1")
         adapter.load_program(self.ngc())
         adapter.program_start()
-        adapter.program_stop()
+        adapter.stop_motion()
+        adapter.stop_followup()
         adapter.set_wcs("G55")
         waits = [args for name, args in self.machine.log if name == "wait_complete"]
         self.assertGreaterEqual(len(waits), 6)
@@ -1618,7 +2308,12 @@ class TestEstop(FakeCase):
         """The threading contract (class docstring): software_estop may run
         while an action runs in another thread, so it may write nothing else
         of the adapter's state - except _estop_sent, a single bool store the
-        snapshot only reads and clears (LinuxCncAdapter._note_task_state)."""
+        snapshot only reads and clears (LinuxCncAdapter._note_task_state),
+        and (plan WP03) the stop sequence an action in progress checks
+        before its motion command (_note_stop: _stop_seq, _stop_why).
+        Since plan WP04 its message is an ERROR: the message band's four
+        fields - the message, its severity, the error box and the box's id
+        counter - all change, written together under _say_lock."""
         adapter = self.on(homed=True)
         adapter.send_mdi("G0 X1")
         adapter.set_jog_step(0.5)
@@ -1631,7 +2326,9 @@ class TestEstop(FakeCase):
         adapter.software_estop()
         after = state()
         changed = {k for k in before if before[k] != after[k]}
-        self.assertEqual(changed, {"_message", "_alarms", "_estop_sent"})
+        self.assertEqual(changed, {"_message", "_message_severity", "_last_error", "_error_seq",
+                                   "_alarms", "_estop_sent", "_stop_seq", "_stop_why"})
+        self.assertEqual(adapter._last_error.text, A.ESTOP_SENT)
 
     def test_on_the_rig_a_software_estop_is_undone_by_on_alone(self):
         """test-rig.hal leaves user-enable-out out of the estop chain, so
@@ -1677,7 +2374,9 @@ class TestEstop(FakeCase):
         or shared channel on top."""
         for name, homed, call, refused in (
             ("jog", False, lambda a: a.jog("X", 1), "Makine devre dışı — jog yok."),
-            ("home", True, lambda a: a.home_all(), "Makine devre dışı — referans alınamaz."),
+            # Confirmed: a homed machine is asked about first (plan WP07).
+            ("home", True, lambda a: a.home_all(confirmed=True),
+             "Makine devre dışı — referans alınamaz."),
         ):
             with self.subTest(action=name):
                 adapter = self.on(homed=homed)
@@ -1695,10 +2394,11 @@ class TestEstop(FakeCase):
                 adapter.software_estop()
                 self.assertTrue(worker.is_alive(), "the action was not actually blocked")
                 self.assertEqual(self.machine.log[-1], ("state", (C["STATE_ESTOP"],)))
-                # On a channel of its own, opened before any action ran.
+                # On a channel of its own, opened before any action ran
+                # (with DURDUR's, plan WP03: three in all).
                 estop_channel = self.machine.log_channel[-1]
                 self.assertNotIn(estop_channel, self.machine.log_channel[:-1])
-                self.assertEqual(len(self.machine.channels), 2)
+                self.assertEqual(len(self.machine.channels), 3)
                 # The rig's latch is not fed by user-enable-out, so LinuxCNC
                 # lands in ESTOP_RESET: motion disabled, refused all the same.
                 self.assertEqual(self.machine.task_state, C["STATE_ESTOP_RESET"])
@@ -1867,9 +2567,13 @@ class TestMdi(FakeCase):
         ])
         self.assertEqual(self.machine.mdi_executed, ["G0 X1"])
         self.assertTrue(entry.accepted)
+        # Plan WP04: sent, its result awaited; the fake runs no interpreter,
+        # so the next snapshot finds it idle with no error - done.
+        self.assertEqual((entry.status, entry.note), (A.MDI_SENT, A.MDI_SENT_NOTE))
+        self.assertEqual(adapter._message, "MDI: G0 X1 — Gönderildi, sonuç bekleniyor.")
         snap = adapter.snapshot()
-        self.assertEqual(snap.mdi_history[-1], entry)
-        self.assertEqual(snap.message, "MDI: G0 X1 — Gönderildi.")
+        self.assertEqual(snap.mdi_history[-1], entry._replace(status="done", note=A.MDI_DONE_NOTE))
+        self.assertEqual(snap.message, "MDI: G0 X1 — Tamamlandı.")
 
     def test_already_in_mdi_sends_no_mode_change(self):
         adapter = self.on(homed=True)
@@ -1975,7 +2679,9 @@ class TestProgram(FakeCase):
         ])
         snap = adapter.snapshot()
         self.assertEqual(snap.program_file, path)
-        self.assertEqual(snap.message, "{} yüklendi.".format(path))
+        # The base name on the message line (plan WP08); the whole path is
+        # on the Program screen.
+        self.assertEqual(snap.message, "{} yüklendi.".format(os.path.basename(path)))
 
     def test_load_program_leaves_auto_first(self):
         """PLAN_SYNCH is refused in AUTO (not in emctaskmain.cc:1024-1080)."""
@@ -2057,7 +2763,7 @@ class TestProgram(FakeCase):
         self.assertEqual(self.machine.wait_status(), -1)
         snap = adapter.snapshot()
         self.assertEqual(snap.program_file, path)
-        self.assertEqual(snap.message, "{} yüklendi.".format(path))
+        self.assertEqual(snap.message, "{} yüklendi.".format(os.path.basename(path)))
 
     def test_timed_out_wait_without_the_file_is_a_failure(self):
         class OpenNotApplied(F.FakeMachine):
@@ -2074,19 +2780,18 @@ class TestProgram(FakeCase):
         """Loading would not hurt motion, but its waits could only time out
         and the result would be guesswork. Refused, nothing sent."""
         path = self.ngc()
-        for name, prepare in (
-            ("homing", lambda m: m.homing.__setitem__(1, 1)),
-            ("joint jog", lambda m: setattr(m, "jogging_active", True)),
+        # Plan WP08: one rule for both adapters and the screen
+        # (programs.load_block), a text for each.
+        for name, prepare, text in (
+            ("homing", lambda m: m.homing.__setitem__(1, 1), programs.LOAD_HOMING),
+            ("joint jog", lambda m: setattr(m, "jogging_active", True), programs.LOAD_MOVING),
         ):
             with self.subTest(moving=name):
                 adapter = self.on(homed=False)
                 prepare(self.machine)
                 adapter.load_program(path)
                 self.assertEqual(self.machine.log, [])
-                self.assertEqual(
-                    adapter.snapshot().message,
-                    "Referans alma ya da jog sürüyor — program yüklenmedi.",
-                )
+                self.assertEqual(adapter.snapshot().message, text)
 
     def test_a_stale_inpos_out_of_on_does_not_block_loading(self):
         """Disabled motion does not update its INPOS flag (control.c
@@ -2153,7 +2858,8 @@ class TestProgram(FakeCase):
         del self.machine.log[:]
         adapter.program_start()
         self.assertEqual(self.machine.log, [])
-        self.assertEqual(adapter.snapshot().message, "Program zaten çalışıyor.")
+        # Plan WP09: programs.start_busy (was "Program zaten çalışıyor.").
+        self.assertEqual(adapter.snapshot().message, programs.START_RUNNING)
 
     def test_load_while_running_is_refused(self):
         adapter = self.on(homed=True)
@@ -2165,16 +2871,25 @@ class TestProgram(FakeCase):
         self.assertEqual(adapter.snapshot().message, "Program çalışırken yeni program yüklenemez.")
 
     def test_stop_aborts_and_waits(self):
-        """task_stop, axis.py:2411-2417."""
+        """task_stop, axis.py:2411-2417: abort() on the stop channel at once
+        (stop_motion), then abort() on the action channel and a bounded wait
+        (stop_followup). Until plan WP03: program_stop, one abort."""
         adapter = self.on(homed=True)
         adapter.load_program(self.ngc())
         adapter.program_start()
         del self.machine.log[:]
-        adapter.program_stop()
-        self.assertEqual(self.machine.log, [("abort", ()), ("wait_complete", (WAIT,))])
+        del self.machine.log_channel[:]
+        adapter.stop_motion()
+        adapter.stop_followup()
+        self.assertEqual(self.machine.log, [("abort", ()), ("abort", ()), ("wait_complete", (WAIT,))])
+        self.assertEqual(self.machine.log_channel, [2, 0, 0])
         snap = adapter.snapshot()
         self.assertFalse(snap.program_running)
-        self.assertEqual(snap.message, "Program durduruldu.")
+        # Plan WP09: the snapshot that finds the run over after DURDUR names
+        # the program (was "Durduruldu.", stop_followup's word, which it
+        # replaces).
+        self.assertEqual(snap.message,
+                         programs.STOPPED_TEXT.format(os.path.basename(self.machine.file)))
 
     def test_stop_that_has_not_taken_yet_says_so(self):
         """abort() was sent but the interpreter is still busy after the
@@ -2186,7 +2901,8 @@ class TestProgram(FakeCase):
         adapter = self.on(homed=True, machine=SlowAbort())
         adapter.load_program(self.ngc())
         adapter.program_start()
-        adapter.program_stop()
+        adapter.stop_motion()
+        adapter.stop_followup()
         self.assertEqual(adapter.snapshot().message, "Durdurma gönderildi — LinuxCNC henüz boşta değil.")
 
     def test_paused_program_is_not_running(self):
@@ -2229,7 +2945,8 @@ class TestModeSwitchRefused(FakeCase):
         for name, call, what in (
             ("jog", lambda a: a.jog("X", 1), "jog yok"),
             ("load", lambda a: a.load_program(path), "program yüklenmedi"),
-            ("home", lambda a: a.home_all(), "referans alınamaz"),
+            # Confirmed: a homed machine is asked about first (plan WP07).
+            ("home", lambda a: a.home_all(confirmed=True), "referans alınamaz"),
         ):
             with self.subTest(action=name):
                 adapter = self.on(homed=True)
@@ -2909,6 +3626,11 @@ class TestHalcmdHelpers(unittest.TestCase):
     def test_run_halcmd_never_raises(self):
         saved = os.environ.get("PATH", "")
         self.addCleanup(os.environ.__setitem__, "PATH", saved)
+        # Starting /bin/sh can take longer than the production timeout on a
+        # loaded host (seen once on 2026-11-13); this test is about never
+        # raising, not about the timeout, so give the stub script room.
+        self.addCleanup(setattr, A, "HALCMD_TIMEOUT_S", A.HALCMD_TIMEOUT_S)
+        A.HALCMD_TIMEOUT_S = 30.0
         with tempfile.TemporaryDirectory() as d:
             os.environ["PATH"] = d
             ok, out = A._run_halcmd(["-s", "show", "pin", "x"])
